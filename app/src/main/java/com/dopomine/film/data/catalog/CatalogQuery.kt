@@ -65,8 +65,18 @@ data class CatalogQuery(
         // rating sorts need enough votes to mean something
         val votes = if (sort == Sort.RATING) maxOf(minVotes, if (kind == Kind.FILMS) 20_000 else 5_000) else minVotes
         if (votes > 0) { parts += "kp_votes >= ?"; args += votes }
+        // like Kinopoisk's own top: no documentaries or shorts unless that is what was asked for
+        if (sort == Sort.RATING && kind == Kind.FILMS) {
+            if (genre != DOCUMENTARY) { parts += "(genres & ?) = 0"; args += Genres.bit(DOCUMENTARY) }
+            if (genre != ANIMATION) parts += "(duration IS NULL OR duration >= 40)"
+        }
         if (sort == Sort.NEW) parts += "year IS NOT NULL"
         return parts.joinToString(" AND ") to args
+    }
+
+    private companion object {
+        const val DOCUMENTARY = "Документальный"
+        const val ANIMATION = "Мультфильм"
     }
 }
 
