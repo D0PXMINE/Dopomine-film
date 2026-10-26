@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Dopomine</string>
+    <string name="pip_play">Воспроизвести</string>
+    <string name="pip_pause">Пауза</string>
+</resources>
