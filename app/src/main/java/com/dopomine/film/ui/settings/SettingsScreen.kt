@@ -1,6 +1,7 @@
 package com.dopomine.film.ui.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,27 +12,19 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.ErrorOutline
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -42,26 +35,31 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dopomine.film.BuildConfig
-import com.dopomine.film.data.api.ApiClient
+import com.dopomine.film.ui.common.ContentCard
 import com.dopomine.film.ui.common.Launchers
 import com.dopomine.film.ui.common.appViewModel
-import com.dopomine.film.ui.components.GradientButton
+import com.dopomine.film.ui.components.Caps
+import com.dopomine.film.ui.components.Divider
 import com.dopomine.film.ui.components.LogoMark
+import com.dopomine.film.ui.components.Pill
+import com.dopomine.film.ui.components.Segmented
 import com.dopomine.film.ui.components.TopBar
 import com.dopomine.film.ui.navigation.Nav
-import com.dopomine.film.ui.theme.Palette
+import com.dopomine.film.ui.theme.T
+import com.dopomine.film.ui.theme.ThemeMode
+import com.dopomine.film.ui.theme.Type
 
 @Composable
 fun SettingsScreen(nav: Nav) {
     val vm = appViewModel { c, _ -> SettingsViewModel(c) }
     val settings by vm.settings.collectAsStateWithLifecycle()
-    val keyCheck by vm.keyCheck.collectAsStateWithLifecycle()
     val message by vm.message.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
@@ -73,165 +71,136 @@ fun SettingsScreen(nav: Nav) {
             vm.consumeMessage()
         }
     }
-    LaunchedEffect(Unit) { vm.checkCurrentKey() }
-
-    var key by rememberSaveable(s.apiKey) { mutableStateOf(s.apiKey) }
     var host by rememberSaveable(s.playerHost) { mutableStateOf(s.playerHost) }
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             TopBar("Настройки", onBack = nav::back)
-            Column(
-                Modifier
-                    .verticalScroll(rememberScrollState())
-                    .navigationBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                Card("Кинопоиск API") {
-                    Text(
-                        "Каталог, рейтинги и описания загружаются через Kinopoisk Unofficial API. Ключ бесплатный — получите его после регистрации на сайте.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Palette.TextSecondary,
-                    )
-                    Field(value = key, onValueChange = { key = it }, label = "API-ключ")
-                    KeyStatus(keyCheck)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        GradientButton("Сохранить", onClick = { vm.saveKey(key) }, height = 44.dp)
-                        Spacer(Modifier.width(8.dp))
-                        TextButton(onClick = { Launchers.openUrl(context, ApiClient.KEY_SITE) }) { Text("Получить ключ") }
-                    }
-                }
-
-                Card("Плеер") {
-                    ToggleRow("Блокировать рекламу", "Фильтр рекламы и всплывающих окон в плеере", s.adBlock, vm::setAdBlock)
-                    ToggleRow("Горизонтальный режим", "Открывать плеер сразу в альбомной ориентации", s.landscapePlayer, vm::setLandscape)
-                    ToggleRow("Продолжать с места остановки", "Запоминать позицию просмотра", s.autoResume, vm::setAutoResume)
-                    ToggleRow("Жесты", "Свайп слева — яркость, справа — громкость", s.gestures, vm::setGestures)
-                    Spacer(Modifier.height(4.dp))
-                    Text("Адрес плеера (зеркало)", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        "Если сайт плеера сменит адрес, укажите новый. Ссылка открывается как адрес/ID_Кинопоиска.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Palette.TextSecondary,
-                    )
-                    Field(value = host, onValueChange = { host = it }, label = "https://…", keyboardType = KeyboardType.Uri)
-                    Row {
-                        TextButton(onClick = { vm.setPlayerHost(host) }) { Text("Сохранить") }
-                        TextButton(onClick = vm::resetPlayerHost) { Text("По умолчанию", color = Palette.TextSecondary) }
-                    }
-                }
-
-                Card("Данные") {
-                    ActionRow("Очистить кэш", "Картинки, ответы каталога и данные плеера") { vm.clearCache(context) }
-                    ActionRow("Очистить историю", "Список «Продолжить просмотр» и позиции") { vm.clearHistory() }
-                }
-
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically,
+            ContentCard {
+                Column(
+                    Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding().padding(horizontal = 18.dp, vertical = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    LogoMark(20.dp)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Dopomine ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodySmall, color = Palette.TextMuted)
+                    Group("оформление")
+                    Text("Тема", style = Type.item, color = T.text)
+                    Segmented(listOf("Система", "Светлая", "Тёмная"), s.theme.ordinal, { vm.setTheme(ThemeMode.entries[it]) })
+                    Spacer(Modifier.height(4.dp))
+                    Toggle("Анимация точек", "Живые узоры на баннерах и пустых экранах", s.animations, vm::setAnimations)
+
+                    Group("плеер")
+                    Toggle("Блокировать рекламу", "Фильтр рекламы, всплывающих окон и переходов на чужие сайты", s.adBlock, vm::setAdBlock)
+                    Toggle("Горизонтальный режим", "Открывать плеер сразу в альбомной ориентации", s.landscapePlayer, vm::setLandscape)
+                    Toggle("Продолжать с места остановки", "Запоминать позицию для каждого фильма и серии", s.autoResume, vm::setAutoResume)
+                    Toggle("Следующая серия", "Включать следующую серию автоматически", s.autoNext, vm::setAutoNext)
+                    Toggle("Жесты", "Свайп слева — яркость, справа — громкость, по горизонтали — перемотка", s.gestures, vm::setGestures)
+                    Spacer(Modifier.height(8.dp))
+                    Text("Адрес плеера", style = Type.item, color = T.text)
+                    Text("Сайт из скрипта: видео ищется на его странице адрес/ID. Если он сменит зеркало — укажите новое.", style = Type.mono, color = T.text3)
+                    Field(host, { host = it })
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Pill("Сохранить", { vm.setPlayerHost(host) }, primary = true)
+                        Pill("По умолчанию", vm::resetPlayerHost)
+                    }
+
+                    Group("каталог")
+                    val info = vm.catalogInfo
+                    Text(
+                        if (info != null) "${info.second} фильмов и сериалов · версия ${info.first?.let(::prettyVersion) ?: "—"}" else "…",
+                        style = Type.item, color = T.text,
+                    )
+                    Text("Названия, годы и жанры — из Wikidata, рейтинги — Кинопоиска и IMDb. Ключи и регистрация не нужны. Каталог обновляется раз в неделю.", style = Type.mono, color = T.text3)
+                    Pill(if (vm.updating) "Проверяем…" else "Проверить обновление", vm::updateCatalog)
+
+                    Group("данные")
+                    Action("Очистить кэш", "Картинки, ответы сайтов и данные плеера") { vm.clearCache(context) }
+                    Action("Очистить историю", "«Продолжить просмотр» и позиции просмотра") { vm.clearHistory() }
+
+                    Spacer(Modifier.height(24.dp))
+                    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                        LogoMark(28.dp)
+                        Spacer(Modifier.height(8.dp))
+                        Text("dopomine ${BuildConfig.VERSION_NAME}", style = Type.mono, color = T.text3)
+                        Row {
+                            Text("Created by ", style = Type.mono, color = T.text3)
+                            Text(
+                                "dopamine", style = Type.mono.copy(textDecoration = TextDecoration.Underline), color = T.text,
+                                modifier = Modifier.clickable { Launchers.openUrl(context, "https://t.me/d0paminx") },
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(24.dp))
                 }
-                Spacer(Modifier.height(16.dp))
             }
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding())
     }
 }
 
+private fun prettyVersion(v: String) = if (v.length >= 8) "${v.substring(6, 8)}.${v.substring(4, 6)}.${v.substring(0, 4)}" else v
+
 @Composable
-fun KeyStatus(check: KeyCheck) {
-    when (check) {
-        KeyCheck.Idle -> Unit
-        KeyCheck.Checking -> Row(verticalAlignment = Alignment.CenterVertically) {
-            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-            Spacer(Modifier.width(8.dp))
-            Text("Проверяем ключ…", style = MaterialTheme.typography.bodySmall, color = Palette.TextSecondary)
-        }
-        is KeyCheck.Valid -> Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Rounded.CheckCircle, null, tint = Palette.RatingGood, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(8.dp))
-            val quota = if (check.info.dailyLimit > 0) " · сегодня ${check.info.dailyUsed} из ${check.info.dailyLimit} запросов" else ""
-            Text("Ключ работает$quota", style = MaterialTheme.typography.bodySmall, color = Palette.TextSecondary)
-        }
-        is KeyCheck.Invalid -> Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Rounded.ErrorOutline, null, tint = Palette.RatingBad, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(8.dp))
-            Text(check.error.userMessage, style = MaterialTheme.typography.bodySmall, color = Palette.RatingBad)
-        }
-    }
+private fun Group(title: String) {
+    Spacer(Modifier.height(14.dp))
+    Caps(title)
+    Spacer(Modifier.height(4.dp))
+    Divider()
+    Spacer(Modifier.height(4.dp))
 }
 
 @Composable
-fun Field(value: String, onValueChange: (String) -> Unit, label: String, keyboardType: KeyboardType = KeyboardType.Ascii) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        label = { Text(label) },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        keyboardOptions = KeyboardOptions(keyboardType = keyboardType, autoCorrectEnabled = false),
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedBorderColor = Palette.Accent,
-            unfocusedBorderColor = Palette.Outline,
-            focusedLabelColor = Palette.Accent,
-            cursorColor = Palette.Accent,
-        ),
-    )
-}
-
-@Composable
-private fun Card(title: String, content: @Composable () -> Unit) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(20.dp))
-            .background(Palette.Surface)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Text(title, style = MaterialTheme.typography.titleMedium, color = Palette.Accent)
-        content()
-    }
-}
-
-@Composable
-private fun ToggleRow(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+private fun Toggle(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .clickable { onChange(!checked) }
-            .padding(vertical = 4.dp),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { onChange(!checked) }.padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = Palette.TextSecondary)
+            Text(title, style = Type.item, color = T.text)
+            Text(subtitle, style = Type.monoSmall, color = T.text3)
         }
-        Switch(
-            checked = checked,
-            onCheckedChange = onChange,
-            colors = SwitchDefaults.colors(checkedTrackColor = Palette.Accent, checkedThumbColor = Color.White),
+        Spacer(Modifier.width(12.dp))
+        Switch(checked)
+    }
+}
+
+/** splicer's switch: a small pill with a round knob, filled with the text color when on. */
+@Composable
+private fun Switch(checked: Boolean) {
+    Box(
+        Modifier.size(40.dp, 23.dp).clip(RoundedCornerShape(999.dp))
+            .background(if (checked) T.accent else T.surface3)
+            .border(1.dp, if (checked) T.accent else T.border, RoundedCornerShape(999.dp))
+            .padding(3.dp),
+    ) {
+        Box(
+            Modifier.offset(x = if (checked) 17.dp else 0.dp).size(17.dp).clip(CircleShape)
+                .background(if (checked) T.accentFg else T.surface),
         )
     }
 }
 
 @Composable
-private fun ActionRow(title: String, subtitle: String, onClick: () -> Unit) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
-            .padding(vertical = 6.dp),
+private fun Action(title: String, subtitle: String, onClick: () -> Unit) {
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick).padding(vertical = 8.dp)) {
+        Text(title, style = Type.item, color = T.text)
+        Text(subtitle, style = Type.monoSmall, color = T.text3)
+    }
+}
+
+@Composable
+private fun Field(value: String, onChange: (String) -> Unit) {
+    Box(
+        Modifier.fillMaxWidth().height(44.dp).clip(RoundedCornerShape(999.dp)).background(T.surface)
+            .border(1.dp, T.border, RoundedCornerShape(999.dp)).padding(horizontal = 16.dp),
+        contentAlignment = Alignment.CenterStart,
     ) {
-        Text(title, style = MaterialTheme.typography.bodyLarge)
-        Text(subtitle, style = MaterialTheme.typography.bodySmall, color = Palette.TextSecondary)
+        BasicTextField(
+            value = value,
+            onValueChange = onChange,
+            singleLine = true,
+            textStyle = Type.mono.copy(color = T.text),
+            cursorBrush = SolidColor(T.text),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
 }

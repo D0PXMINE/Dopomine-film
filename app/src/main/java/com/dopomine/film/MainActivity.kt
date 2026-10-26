@@ -7,13 +7,15 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dopomine.film.ui.common.KpLinks
 import com.dopomine.film.ui.navigation.AppNavHost
 import com.dopomine.film.ui.theme.DopomineTheme
+import com.dopomine.film.ui.theme.ThemeMode
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
 
@@ -23,22 +25,26 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         val splash = installSplashScreen()
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
-        )
         val settings = appContainer.settings
         splash.setKeepOnScreenCondition { settings.state.value == null }
         if (savedInstanceState == null) handleIntent(intent)
 
         val links = deepLinks.receiveAsFlow()
         setContent {
-            DopomineTheme {
-                val state by settings.state.collectAsStateWithLifecycle()
-                val loaded = state ?: return@DopomineTheme
-                // decided once per launch so that finishing onboarding does not rebuild the graph
-                val showOnboarding = remember { loaded.apiKey.isBlank() && !loaded.onboardingDone }
-                AppNavHost(showOnboarding = showOnboarding, deepLinks = links)
+            val state by settings.state.collectAsStateWithLifecycle()
+            val loaded = state ?: return@setContent
+            val dark = when (loaded.theme) {
+                ThemeMode.SYSTEM -> isSystemInDarkTheme()
+                ThemeMode.LIGHT -> false
+                ThemeMode.DARK -> true
+            }
+            DisposableEffect(dark) {
+                val bars = if (dark) SystemBarStyle.dark(Color.TRANSPARENT) else SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT)
+                enableEdgeToEdge(statusBarStyle = bars, navigationBarStyle = bars)
+                onDispose {}
+            }
+            DopomineTheme(loaded.theme) {
+                AppNavHost(deepLinks = links, animations = loaded.animations)
             }
         }
     }

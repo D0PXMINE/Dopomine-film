@@ -3,16 +3,16 @@ package com.dopomine.film.ui.settings
 import android.content.Context
 import android.webkit.CookieManager
 import android.webkit.WebStorage
-import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import coil3.SingletonImageLoader
 import com.dopomine.film.AppContainer
-import com.dopomine.film.data.AppException
-import com.dopomine.film.data.model.ApiKeyInfo
+import com.dopomine.film.data.catalog.CatalogUpdater
 import com.dopomine.film.data.settings.AppSettings
-import com.dopomine.film.data.toAppException
-import kotlinx.coroutines.CancellationException
+import com.dopomine.film.ui.theme.ThemeMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,91 +20,62 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-@Immutable
-sealed interface KeyCheck {
-    data object Idle : KeyCheck
-    data object Checking : KeyCheck
-    data class Valid(val info: ApiKeyInfo) : KeyCheck
-    data class Invalid(val error: AppException) : KeyCheck
-}
-
-class SettingsViewModel(private val container: AppContainer) : ViewModel() {
-    val settings: StateFlow<AppSettings?> = container.settings.state
-
-    private val _keyCheck = MutableStateFlow<KeyCheck>(KeyCheck.Idle)
-    val keyCheck: StateFlow<KeyCheck> = _keyCheck.asStateFlow()
+class SettingsViewModel(private val c: AppContainer) : ViewModel() {
+    val settings: StateFlow<AppSettings?> = c.settings.state
 
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
 
-    /** Validates the key against the API and saves it when it works. */
-    fun saveKey(key: String, onSaved: () -> Unit = {}) {
-        val trimmed = key.trim()
-        if (trimmed.isEmpty()) {
-            viewModelScope.launch { container.settings.setApiKey("") }
-            _keyCheck.value = KeyCheck.Idle
-            return
-        }
-        _keyCheck.value = KeyCheck.Checking
-        viewModelScope.launch {
-            try {
-                val info = container.movies.keyInfo(trimmed)
-                container.settings.setApiKey(trimmed)
-                container.settings.setOnboardingDone()
-                container.movies.clearMemoryCache()
-                _keyCheck.value = KeyCheck.Valid(info)
-                onSaved()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                _keyCheck.value = KeyCheck.Invalid(e.toAppException())
-            }
-        }
+    var catalogInfo by mutableStateOf<Pair<String?, Int>?>(null)
+        private set
+    var updating by mutableStateOf(false)
+        private set
+
+    init {
+        viewModelScope.launch { catalogInfo = runCatching { c.catalog.catalogInfo() }.getOrNull() }
     }
 
-    fun checkCurrentKey() {
-        val key = settings.value?.apiKey.orEmpty()
-        if (key.isBlank()) return
-        _keyCheck.value = KeyCheck.Checking
-        viewModelScope.launch {
-            _keyCheck.value = try {
-                KeyCheck.Valid(container.movies.keyInfo(key))
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                KeyCheck.Invalid(e.toAppException())
-            }
-        }
-    }
-
-    fun skipOnboarding() = viewModelScope.launch { container.settings.setOnboardingDone() }
+    fun setTheme(mode: ThemeMode) = viewModelScope.launch { c.settings.setTheme(mode) }
+    fun setAnimations(v: Boolean) = viewModelScope.launch { c.settings.setAnimations(v) }
+    fun setAdBlock(v: Boolean) = viewModelScope.launch { c.settings.setAdBlock(v) }
+    fun setLandscape(v: Boolean) = viewModelScope.launch { c.settings.setLandscapePlayer(v) }
+    fun setAutoResume(v: Boolean) = viewModelScope.launch { c.settings.setAutoResume(v) }
+    fun setGestures(v: Boolean) = viewModelScope.launch { c.settings.setGestures(v) }
+    fun setAutoNext(v: Boolean) = viewModelScope.launch { c.settings.setAutoNext(v) }
 
     fun setPlayerHost(host: String) = viewModelScope.launch {
-        container.settings.setPlayerHost(host)
+        c.settings.setPlayerHost(host)
         _message.value = "Адрес плеера сохранён"
     }
 
     fun resetPlayerHost() = viewModelScope.launch {
-        container.settings.resetPlayerHost()
+        c.settings.resetPlayerHost()
         _message.value = "Адрес плеера сброшен"
     }
 
-    fun setAdBlock(v: Boolean) = viewModelScope.launch { container.settings.setAdBlock(v) }
-    fun setLandscape(v: Boolean) = viewModelScope.launch { container.settings.setLandscapePlayer(v) }
-    fun setAutoResume(v: Boolean) = viewModelScope.launch { container.settings.setAutoResume(v) }
-    fun setGestures(v: Boolean) = viewModelScope.launch { container.settings.setGestures(v) }
+    fun updateCatalog() {
+        if (updating) return
+        updating = true
+        viewModelScope.launch {
+            _message.value = when (val r = c.catalogUpdater.check()) {
+                CatalogUpdater.Result.UpToDate -> "Каталог уже свежий"
+                is CatalogUpdater.Result.Staged -> "Новый каталог скачан — он подключится при следующем запуске"
+                is CatalogUpdater.Result.Failed -> r.message
+            }
+            updating = false
+        }
+    }
 
     fun clearCache(context: Context) {
         val app = context.applicationContext
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
-                runCatching { container.httpClient.cache?.evictAll() }
+                runCatching { c.httpClient.cache?.evictAll() }
                 SingletonImageLoader.get(app).let { loader ->
                     loader.memoryCache?.clear()
                     loader.diskCache?.clear()
                 }
             }
-            container.movies.clearMemoryCache()
             WebStorage.getInstance().deleteAllData()
             CookieManager.getInstance().removeAllCookies(null)
             _message.value = "Кэш очищен"
@@ -112,7 +83,7 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     fun clearHistory() = viewModelScope.launch {
-        container.library.clearHistory()
+        c.library.clearHistory()
         _message.value = "История очищена"
     }
 

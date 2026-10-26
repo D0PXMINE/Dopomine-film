@@ -9,15 +9,6 @@ plugins {
     alias(libs.plugins.roborazzi)
 }
 
-// Optional: put your own Kinopoisk Unofficial API key into local.properties (KP_API_KEY=...)
-// or the KP_API_KEY environment variable to ship it inside the APK.
-// The key can also be entered in the app on first launch.
-val localProps = Properties().apply {
-    val file = rootProject.file("local.properties")
-    if (file.exists()) file.inputStream().use { load(it) }
-}
-val kpApiKey: String = (localProps.getProperty("KP_API_KEY") ?: System.getenv("KP_API_KEY") ?: "").trim()
-
 // Release signing: keystore.properties (storeFile, storePassword, keyAlias, keyPassword)
 // falls back to the bundled debug keystore so every build can be installed over the previous one.
 val keystoreProps = Properties().apply {
@@ -33,11 +24,11 @@ android {
         applicationId = "com.dopomine.film"
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "2.0.0"
 
-        buildConfigField("String", "KP_API_KEY", "\"$kpApiKey\"")
         buildConfigField("String", "DEFAULT_PLAYER_HOST", "\"https://fz7-16gs81j.troutcdn.site\"")
+        buildConfigField("String", "CATALOG_UPDATE_URL", "\"https://github.com/D0PXMINE/Dopomine-film/releases/download/catalog/catalog.db.gz\"")
     }
 
     signingConfigs {
@@ -95,6 +86,8 @@ android {
             all {
                 it.systemProperty("robolectric.graphicsMode", "NATIVE")
                 System.getProperty("dpm.posters")?.let { dir -> it.systemProperty("dpm.posters", dir) }
+                System.getProperty("dpm.online")?.let { v -> it.systemProperty("dpm.online", v) }
+                it.testLogging { showStandardStreams = System.getProperty("dpm.online") == "true" }
             }
         }
     }
@@ -126,8 +119,11 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
 
     implementation(libs.okhttp)
-    implementation(libs.retrofit)
-    implementation(libs.retrofit.serialization)
+    implementation(libs.media3.exoplayer)
+    implementation(libs.media3.hls)
+    implementation(libs.media3.dash)
+    implementation(libs.media3.ui)
+    implementation(libs.media3.okhttp)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)

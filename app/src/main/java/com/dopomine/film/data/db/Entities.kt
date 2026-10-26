@@ -34,18 +34,27 @@ data class HistoryEntity(
     val watchedAt: Long,
     val positionSec: Int = 0,
     val durationSec: Int = 0,
+    /** Last episode played (series from a source with an episode list). */
+    val lastSeason: Int? = null,
+    val lastEpisode: Int? = null,
 )
 
-/** Playback position of one video (a film or one episode) identified by its duration. */
-@Entity(tableName = "progress", primaryKeys = ["movieId", "durationSec"])
+/**
+ * Playback position of one video of a title. [item] identifies it: "movie", "s1e3"
+ * for an episode, or "d5400" (duration in seconds) when the source gives no episode list.
+ */
+@Entity(tableName = "progress", primaryKeys = ["movieId", "item"])
 data class ProgressEntity(
     val movieId: Int,
-    val durationSec: Int,
+    val item: String,
     val positionSec: Int,
+    val durationSec: Int,
     val updatedAt: Long,
 )
 
 private const val SEP = "|"
+
+private fun typeOf(name: String) = runCatching { ContentType.valueOf(name) }.getOrDefault(ContentType.FILM)
 
 fun Movie.toFavorite(now: Long = System.currentTimeMillis()) = FavoriteEntity(
     id = id,
@@ -65,10 +74,9 @@ fun FavoriteEntity.toMovie() = Movie(
     title = title,
     originalTitle = originalTitle,
     year = year,
-    posterUrl = posterUrl,
     ratingKp = ratingKp,
     ratingImdb = ratingImdb,
-    type = runCatching { ContentType.valueOf(type) }.getOrDefault(ContentType.FILM),
+    type = typeOf(type),
     genres = genres.split(SEP).filter { it.isNotBlank() },
 )
 
@@ -78,7 +86,7 @@ fun Movie.toHistory(now: Long = System.currentTimeMillis()) = HistoryEntity(
     originalTitle = originalTitle,
     year = year,
     posterUrl = posterUrl,
-    coverUrl = coverUrl,
+    coverUrl = null,
     ratingKp = ratingKp,
     ratingImdb = ratingImdb,
     type = type.name,
@@ -91,10 +99,8 @@ fun HistoryEntity.toMovie() = Movie(
     title = title,
     originalTitle = originalTitle,
     year = year,
-    posterUrl = posterUrl,
-    coverUrl = coverUrl,
     ratingKp = ratingKp,
     ratingImdb = ratingImdb,
-    type = runCatching { ContentType.valueOf(type) }.getOrDefault(ContentType.FILM),
+    type = typeOf(type),
     genres = genres.split(SEP).filter { it.isNotBlank() },
 )

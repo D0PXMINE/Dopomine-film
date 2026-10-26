@@ -1,0 +1,49 @@
+name: Catalog
+
+# Rebuilds the offline catalog (Wikidata + Kinopoisk ratings) every week and publishes it
+# as the "catalog" release asset; the app downloads it on its own.
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore builder cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .catalog-work
+          key: catalog-work-${{ github.run_id }}
+          restore-keys: catalog-work-
+
+      - name: Build catalog
+        env:
+          REFRESH_CANDIDATES: "1"
+        run: python3 tools/catalog/build_catalog.py --work .catalog-work --out catalog.db
+
+      - name: Save builder cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .catalog-work
+          key: catalog-work-${{ github.run_id }}
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gzip -9 -k catalog.db
+          python3 -c "import sqlite3; print(sqlite3.connect('catalog.db').execute(\"SELECT value FROM meta WHERE key = 'version'\").fetchone()[0])" > version.txt
+          gh release view catalog >/dev/null 2>&1 || \
+            gh release create catalog --title "Каталог" --notes "Еженедельный снимок каталога для приложения" --latest=false
+          # version.txt goes last: the app reads it first and only then downloads the archive
+          gh release upload catalog catalog.db.gz --clobber
+          gh release upload catalog version.txt --clobber

@@ -36,8 +36,11 @@ interface HistoryDao {
     @Upsert
     suspend fun upsert(entity: HistoryEntity)
 
-    @Query("UPDATE history SET positionSec = :position, durationSec = :duration, watchedAt = :now WHERE id = :id")
-    suspend fun updateProgress(id: Int, position: Int, duration: Int, now: Long)
+    @Query(
+        "UPDATE history SET positionSec = :position, durationSec = :duration, watchedAt = :now, " +
+            "lastSeason = COALESCE(:season, lastSeason), lastEpisode = COALESCE(:episode, lastEpisode) WHERE id = :id"
+    )
+    suspend fun updateProgress(id: Int, position: Int, duration: Int, season: Int?, episode: Int?, now: Long)
 
     @Query("DELETE FROM history WHERE id = :id")
     suspend fun delete(id: Int)
@@ -54,8 +57,11 @@ interface ProgressDao {
     @Upsert
     suspend fun upsert(entity: ProgressEntity)
 
-    @Query("DELETE FROM progress WHERE movieId = :movieId AND durationSec = :durationSec")
-    suspend fun delete(movieId: Int, durationSec: Int)
+    @Query("SELECT * FROM progress WHERE movieId = :movieId AND item = :item")
+    suspend fun get(movieId: Int, item: String): ProgressEntity?
+
+    @Query("DELETE FROM progress WHERE movieId = :movieId AND item = :item")
+    suspend fun delete(movieId: Int, item: String)
 
     @Query("DELETE FROM progress WHERE movieId = :movieId")
     suspend fun deleteForMovie(movieId: Int)

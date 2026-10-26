@@ -12,10 +12,7 @@ import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.SearchOff
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -29,14 +26,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.dopomine.film.data.model.Movie
 import com.dopomine.film.ui.common.PagedLoader
-import com.dopomine.film.ui.theme.Palette
+import com.dopomine.film.ui.theme.T
+import com.dopomine.film.ui.theme.Type
+import androidx.compose.foundation.layout.size
 
 /** Poster grid with infinite scroll on top of a [PagedLoader]. */
 @Composable
 fun MovieGrid(
     loader: PagedLoader,
     onMovieClick: (Movie) -> Unit,
-    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
     state: LazyGridState = rememberLazyGridState(),
     contentPadding: PaddingValues = PaddingValues(16.dp),
@@ -48,8 +46,8 @@ fun MovieGrid(
     if (items.isEmpty()) {
         Box(modifier.fillMaxSize()) {
             when {
-                error != null -> ErrorState(error, onRetry = loader::retry, onOpenSettings = onOpenSettings, modifier = Modifier.align(Alignment.Center))
-                loader.loadedOnce && !loader.loading -> EmptyHint(Icons.Rounded.SearchOff, "Ничего не нашлось", Modifier.align(Alignment.Center), subtitle = "Попробуйте изменить фильтры")
+                error != null -> ErrorState(error, onRetry = loader::retry, modifier = Modifier.align(Alignment.Center))
+                loader.loadedOnce && !loader.loading -> EmptyHint("Ничего не нашлось", Modifier.align(Alignment.Center), subtitle = "Попробуйте изменить фильтры")
                 else -> LazyVerticalGrid(
                     columns = GridCells.Adaptive(108.dp),
                     contentPadding = contentPadding,
@@ -90,10 +88,10 @@ fun MovieGrid(
                 Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
                     if (error != null) {
                         TextButton(onClick = loader::retry) {
-                            Text("${error.userMessage}. Повторить", color = Palette.Accent, style = MaterialTheme.typography.labelLarge)
+                            Text("${error.userMessage}. Повторить", color = T.text, style = Type.button)
                         }
                     } else {
-                        CircularProgressIndicator(strokeWidth = 3.dp)
+                        CircularProgressIndicator(strokeWidth = 2.dp, color = T.text, modifier = Modifier.size(24.dp))
                     }
                 }
             }

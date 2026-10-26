@@ -1,7 +1,7 @@
 """Generates the launcher icon resources (adaptive vectors + legacy PNGs).
 
-Geometry: a film reel (disc with five round holes) with a play-triangle cut-out,
-filled with the brand gradient, on a dark background.
+The mark: black rays coming out of the center, forming a circle (a nod to the
+Kinopoisk logo), on a white tile — monochrome, like the rest of the app.
 Run: python3 tools/gen_icons.py
 """
 import math
@@ -10,33 +10,34 @@ import os
 from PIL import Image, ImageDraw
 
 ROOT = os.path.join(os.path.dirname(__file__), "..", "app", "src", "main", "res")
-GRAD = ["#FF8B5CF6", "#FFFF4D6D", "#FFFF9B42"]  # violet -> pink -> orange
-BG = "#FF0E0E17"
+
+RAYS = 24          # number of rays
+DUTY = 0.55        # share of each step covered by a ray at the rim
+INNER = 0.1        # inner radius as a share of the outer radius (keeps the center clean)
+BLACK = "#FF0A0A0A"
+WHITE = "#FFFFFFFF"
 
 
-def reel_shapes(cx, cy, scale):
-    """Returns (disc, holes, triangle) in a coordinate system where the disc radius is 30*scale."""
-    disc = (cx, cy, 30 * scale)
-    holes = []
-    for k in range(5):
-        a = math.radians(-90 + k * 72)
-        holes.append((cx + 17 * scale * math.cos(a), cy + 17 * scale * math.sin(a), 6.5 * scale))
-    r = 7.5 * scale
-    tri = [(cx + r, cy), (cx - r / 2, cy + r * 0.866), (cx - r / 2, cy - r * 0.866)]
-    return disc, holes, tri
+def ray_polygons(cx, cy, outer):
+    """Each ray is a thin wedge from the inner circle to the rim."""
+    step = 2 * math.pi / RAYS
+    half = step * DUTY / 2
+    inner = outer * INNER
+    polys = []
+    for k in range(RAYS):
+        a = -math.pi / 2 + k * step
+        polys.append([
+            (cx + inner * math.cos(a), cy + inner * math.sin(a)),
+            (cx + outer * math.cos(a - half), cy + outer * math.sin(a - half)),
+            (cx + outer * math.cos(a + half), cy + outer * math.sin(a + half)),
+        ])
+    return polys
 
 
-def circle_path(cx, cy, r):
-    return (f"M{cx - r:.3f},{cy:.3f}a{r:.3f},{r:.3f} 0 1,0 {2 * r:.3f},0"
-            f"a{r:.3f},{r:.3f} 0 1,0 {-2 * r:.3f},0Z")
-
-
-def reel_path(cx, cy, scale):
-    disc, holes, tri = reel_shapes(cx, cy, scale)
-    d = circle_path(*disc)
-    for h in holes:
-        d += circle_path(*h)
-    d += "M{:.3f},{:.3f}L{:.3f},{:.3f}L{:.3f},{:.3f}Z".format(*tri[0], *tri[1], *tri[2])
+def rays_path(cx, cy, outer):
+    d = ""
+    for p in ray_polygons(cx, cy, outer):
+        d += "M{:.3f},{:.3f}L{:.3f},{:.3f}L{:.3f},{:.3f}Z".format(*p[0], *p[1], *p[2])
     return d
 
 
@@ -46,79 +47,30 @@ def write(path, text):
         f.write(text)
 
 
+def vector(path_data, color, size=108):
+    return f"""<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="{size}dp"
+    android:height="{size}dp"
+    android:viewportWidth="{size}"
+    android:viewportHeight="{size}">
+    <path
+        android:fillColor="{color}"
+        android:pathData="{path_data}" />
+</vector>
+"""
+
+
 def vectors():
-    # Adaptive icon: 108x108 canvas, safe zone is the central 66dp circle.
-    d = reel_path(54, 54, 32 / 30)
-    gradient = f"""
-            <aapt:attr name="android:fillColor">
-                <gradient
-                    android:type="linear"
-                    android:startX="22" android:startY="86"
-                    android:endX="86" android:endY="22">
-                    <item android:offset="0" android:color="{GRAD[0]}" />
-                    <item android:offset="0.5" android:color="{GRAD[1]}" />
-                    <item android:offset="1" android:color="{GRAD[2]}" />
-                </gradient>
-            </aapt:attr>"""
-    write(os.path.join(ROOT, "drawable", "ic_launcher_foreground.xml"), f"""<?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:aapt="http://schemas.android.com/aapt"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <path
-        android:fillType="evenOdd"
-        android:pathData="{d}">{gradient}
-    </path>
-</vector>
-""")
-    write(os.path.join(ROOT, "drawable", "ic_launcher_monochrome.xml"), f"""<?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <path
-        android:fillColor="#FFFFFFFF"
-        android:fillType="evenOdd"
-        android:pathData="{d}" />
-</vector>
-""")
-    write(os.path.join(ROOT, "drawable", "ic_launcher_background.xml"), f"""<?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:aapt="http://schemas.android.com/aapt"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <path android:pathData="M0,0h108v108h-108z">
-        <aapt:attr name="android:fillColor">
-            <gradient
-                android:type="radial"
-                android:centerX="54" android:centerY="40"
-                android:gradientRadius="80">
-                <item android:offset="0" android:color="#FF1E1A2E" />
-                <item android:offset="1" android:color="{BG}" />
-            </gradient>
-        </aapt:attr>
-    </path>
-</vector>
-""")
-    # Splash icon (Android 12 style): the icon sits inside a 2/3 circle mask.
-    write(os.path.join(ROOT, "drawable", "ic_splash.xml"), f"""<?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:aapt="http://schemas.android.com/aapt"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <path
-        android:fillType="evenOdd"
-        android:pathData="{reel_path(54, 54, 26 / 30)}">{gradient}
-    </path>
-</vector>
-""")
+    # Adaptive icon: 108x108 canvas, the safe zone is the central 66dp circle.
+    rays = rays_path(54, 54, 30)
+    write(os.path.join(ROOT, "drawable", "ic_launcher_foreground.xml"), vector(rays, BLACK))
+    write(os.path.join(ROOT, "drawable", "ic_launcher_monochrome.xml"), vector(rays, WHITE))
+    write(os.path.join(ROOT, "drawable", "ic_launcher_background.xml"), vector("M0,0h108v108h-108z", WHITE))
+    # Splash (Android 12 style: the icon sits inside a circle of 2/3 of the canvas).
+    splash = rays_path(54, 54, 24)
+    write(os.path.join(ROOT, "drawable", "ic_splash.xml"), vector(splash, BLACK))
+    write(os.path.join(ROOT, "drawable-night", "ic_splash.xml"), vector(splash, "#FFF1F1F1"))
     adaptive = """<?xml version="1.0" encoding="utf-8"?>
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@drawable/ic_launcher_background" />
@@ -130,50 +82,27 @@ def vectors():
     write(os.path.join(ROOT, "mipmap-anydpi-v26", "ic_launcher_round.xml"), adaptive)
 
 
-def hex_rgb(h):
-    h = h.lstrip("#")[-6:]
-    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
-
-
-def gradient_image(size):
-    """Diagonal violet -> pink -> orange gradient, bottom-left to top-right."""
-    img = Image.new("RGB", (size, size))
-    px = img.load()
-    stops = [hex_rgb(c) for c in GRAD]
-    for y in range(size):
-        for x in range(size):
-            t = (x + (size - y)) / (2 * size)
-            if t < 0.5:
-                a, b, u = stops[0], stops[1], t / 0.5
-            else:
-                a, b, u = stops[1], stops[2], (t - 0.5) / 0.5
-            px[x, y] = tuple(int(a[i] + (b[i] - a[i]) * u) for i in range(3))
-    return img
-
-
 def legacy_png(px, round_icon):
     ss = 4
     n = px * ss
-    bg = Image.new("RGBA", (n, n), (0, 0, 0, 0))
-    mask_bg = Image.new("L", (n, n), 0)
-    dm = ImageDraw.Draw(mask_bg)
+    img = Image.new("RGBA", (n, n), (0, 0, 0, 0))
+    mask = Image.new("L", (n, n), 0)
+    dm = ImageDraw.Draw(mask)
     if round_icon:
         dm.ellipse([0, 0, n - 1, n - 1], fill=255)
     else:
         dm.rounded_rectangle([0, 0, n - 1, n - 1], radius=int(n * 0.22), fill=255)
-    bg.paste(Image.new("RGBA", (n, n), hex_rgb(BG) + (255,)), (0, 0), mask_bg)
-
-    reel = Image.new("L", (n, n), 0)
-    dr = ImageDraw.Draw(reel)
-    disc, holes, tri = reel_shapes(n / 2, n / 2, (n * 0.36) / 30)
-    cx, cy, r = disc
-    dr.ellipse([cx - r, cy - r, cx + r, cy + r], fill=255)
-    for hx, hy, hr in holes:
-        dr.ellipse([hx - hr, hy - hr, hx + hr, hy + hr], fill=0)
-    dr.polygon(tri, fill=0)
-    grad = gradient_image(n).convert("RGBA")
-    bg.paste(grad, (0, 0), reel)
-    return bg.resize((px, px), Image.LANCZOS)
+    tile = Image.new("RGBA", (n, n), (255, 255, 255, 255))
+    d = ImageDraw.Draw(tile)
+    for poly in ray_polygons(n / 2, n / 2, n * 0.34):
+        d.polygon(poly, fill=(10, 10, 10, 255))
+    # hairline border so the white tile does not dissolve into light wallpapers
+    if round_icon:
+        d.ellipse([ss, ss, n - 1 - ss, n - 1 - ss], outline=(226, 226, 228, 255), width=ss * 2)
+    else:
+        d.rounded_rectangle([ss, ss, n - 1 - ss, n - 1 - ss], radius=int(n * 0.22), outline=(226, 226, 228, 255), width=ss * 2)
+    img.paste(tile, (0, 0), mask)
+    return img.resize((px, px), Image.LANCZOS)
 
 
 def pngs():
