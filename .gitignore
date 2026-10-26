@@ -12,3 +12,6 @@
 *.jks
 !/app/debug.keystore
 keystore.properties
+.catalog-work/
+/catalog.db
+/catalog.db.gz

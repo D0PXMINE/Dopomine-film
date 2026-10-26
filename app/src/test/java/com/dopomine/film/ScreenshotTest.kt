@@ -2,6 +2,7 @@ package com.dopomine.film
 
 import android.graphics.BitmapFactory
 import androidx.activity.ComponentActivity
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
@@ -15,17 +16,34 @@ import coil3.asImage
 import coil3.test.FakeImageLoaderEngine
 import com.dopomine.film.data.model.ContentType
 import com.dopomine.film.data.model.Movie
-import com.dopomine.film.player.PlayerActions
-import com.dopomine.film.player.PlayerOverlay
-import com.dopomine.film.player.PlayerUiState
+import com.dopomine.film.player.GestureKind
+import com.dopomine.film.player.Mode
+import com.dopomine.film.player.NativeState
+import com.dopomine.film.player.PlayerSession
+import com.dopomine.film.player.Sheet
+import com.dopomine.film.player.SourceChoice
+import com.dopomine.film.player.TrackOption
+import com.dopomine.film.player.resolve.Episode
+import com.dopomine.film.player.resolve.Playable
+import com.dopomine.film.player.resolve.Season
+import com.dopomine.film.player.resolve.Stream
+import com.dopomine.film.player.resolve.StreamFormat
+import com.dopomine.film.player.ui.PlayerControls
+import com.dopomine.film.player.ui.PlayerScreen
+import com.dopomine.film.ui.components.LocalAnimations
 import com.dopomine.film.ui.navigation.AppNavHost
-import com.dopomine.film.ui.onboarding.OnboardingScreen
 import com.dopomine.film.ui.theme.DopomineTheme
+import com.dopomine.film.ui.theme.ThemeMode
 import com.github.takahirom.roborazzi.ExperimentalRoborazziApi
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.github.takahirom.roborazzi.captureScreenRoboImage
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.runBlocking
+import okhttp3.Interceptor
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Protocol
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -37,9 +55,10 @@ import org.robolectric.annotation.GraphicsMode
 import java.io.File
 
 /**
- * Renders the main screens with a fake API so the design can be reviewed without a device.
- * Run: ./gradlew :app:recordRoborazziDebug (images land in app/build/outputs/roborazzi).
- * Real posters are used when -Ddpm.posters=<dir with ID.jpg files> is passed, colored tiles otherwise.
+ * Renders the screens against the bundled catalog, with canned answers instead of the web,
+ * so the design can be reviewed without a device.
+ * Run: ./gradlew :app:recordRoborazziDebug (images in app/build/outputs/roborazzi).
+ * Real posters are used when -Ddpm.posters=<dir with ID.jpg> is passed, dotted placeholders otherwise.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -51,44 +70,57 @@ class ScreenshotTest {
     private lateinit var container: AppContainer
     private val out = "build/outputs/roborazzi"
 
+    private val canned = Interceptor { chain ->
+        val url = chain.request().url
+        val (type, body) = when {
+            url.host == "rating.kinopoisk.ru" ->
+                "text/xml" to """<rating><kp_rating num_vote="817503">8.501</kp_rating><imdb_rating num_vote="2200000">8.7</imdb_rating></rating>"""
+            url.host.endsWith("wikipedia.org") -> "application/json" to """{"extract":"«Матрица» — научно-фантастический боевик 1999 года. Хакер Нео узнаёт, что привычный мир — компьютерная симуляция, созданная машинами, и присоединяется к восстанию против них."}"""
+            url.host == "query.wikidata.org" -> "application/json" to """{"results":{"bindings":[
+                {"role":{"value":"d"},"name":{"value":"Лана Вачовски"}},{"role":{"value":"d"},"name":{"value":"Лилли Вачовски"}},
+                {"role":{"value":"c"},"name":{"value":"Киану Ривз"}},{"role":{"value":"c"},"name":{"value":"Лоренс Фишбёрн"}},
+                {"role":{"value":"c"},"name":{"value":"Кэрри-Энн Мосс"}},{"role":{"value":"c"},"name":{"value":"Хьюго Уивинг"}}]}}"""
+            else -> return@Interceptor Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(404).message("no")
+                .body("".toResponseBody(null)).build()
+        }
+        Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK")
+            .body(body.toResponseBody(type.toMediaType())).build()
+    }
+
     @OptIn(DelicateCoilApi::class)
     @Before
     fun setUp() {
         val app = RuntimeEnvironment.getApplication() as DopomineApp
-        container = AppContainer(app, FakeApi())
+        container = AppContainer(app, canned)
         app.container = container
-        runBlocking {
-            container.settings.setApiKey("test-key")
-            container.settings.setOnboardingDone()
-        }
+        runBlocking { container.settings.current() }
 
         val engine = FakeImageLoaderEngine.Builder().apply {
-            val dir = System.getProperty("dpm.posters")?.let(::File)
-            dir?.listFiles { f -> f.extension == "jpg" }?.forEach { file ->
+            System.getProperty("dpm.posters")?.let(::File)?.listFiles { f -> f.extension == "jpg" }?.forEach { file ->
                 val bitmap = BitmapFactory.decodeFile(file.path) ?: return@forEach
-                intercept({ it is String && it.endsWith("/${file.name}") }, bitmap.asImage())
+                val id = file.nameWithoutExtension
+                intercept({ it is String && (it.endsWith("_$id.jpg") || it.endsWith("/$id.jpg")) }, bitmap.asImage())
             }
-            default(android.graphics.drawable.ColorDrawable(0xFF3A2D5C.toInt()).asImage())
         }.build()
         SingletonImageLoader.setUnsafe(ImageLoader.Builder(app).components { add(engine) }.build())
     }
 
-    private fun app(block: (NavHostController) -> Unit = {}) {
+    private fun app(theme: ThemeMode = ThemeMode.LIGHT, block: (NavHostController) -> Unit = {}) {
         lateinit var controller: NavHostController
         compose.setContent {
-            DopomineTheme {
+            DopomineTheme(theme) {
                 controller = rememberNavController()
-                AppNavHost(showOnboarding = false, deepLinks = emptyFlow(), controller = controller)
+                AppNavHost(deepLinks = emptyFlow(), animations = false, controller = controller)
             }
         }
-        compose.waitForIdle()
+        settle()
         compose.runOnUiThread { block(controller) }
         settle()
     }
 
     private fun settle() {
-        repeat(4) {
-            Thread.sleep(250)
+        repeat(5) {
+            Thread.sleep(300)
             compose.mainClock.advanceTimeBy(400)
             compose.waitForIdle()
         }
@@ -97,21 +129,21 @@ class ScreenshotTest {
     @Test
     fun home() {
         runBlocking {
-            container.library.markOpened(Movie(258687, "Интерстеллар", year = 2014, posterUrl = "https://posters.test/258687.jpg", type = ContentType.FILM, genres = listOf("фантастика")))
-            container.library.saveProgress(258687, 3900.0, 10140.0)
-            container.library.markOpened(Movie(404900, "Во все тяжкие", year = 2008, posterUrl = "https://posters.test/404900.jpg", type = ContentType.SERIES, genres = listOf("драма")))
-            container.library.saveProgress(404900, 1200.0, 2820.0)
+            container.library.markOpened(Movie(258687, "Интерстеллар", year = 2014, genres = listOf("Фантастика")))
+            container.library.saveProgress(258687, "movie", 3_900_000, 10_140_000)
+            container.library.markOpened(Movie(404900, "Во все тяжкие", year = 2008, type = ContentType.SERIES))
+            container.library.saveProgress(404900, "s2e4", 1_200_000, 2_820_000, 2, 4)
         }
         app()
-        compose.onRoot().captureRoboImage("$out/01_home.png")
+        compose.onRoot().captureRoboImage("$out/01_home_light.png")
     }
 
     @Test
-    fun homeSeries() {
-        app()
+    fun homeDarkSeries() {
+        app(ThemeMode.DARK)
         compose.onNodeWithText("Сериалы").performClick()
         settle()
-        compose.onRoot().captureRoboImage("$out/02_home_series.png")
+        compose.onRoot().captureRoboImage("$out/02_home_dark_series.png")
     }
 
     @Test
@@ -121,9 +153,9 @@ class ScreenshotTest {
     }
 
     @Test
-    fun detailsSeries() {
-        app { it.navigate("details/464963") }
-        compose.onRoot().captureRoboImage("$out/04_details_series.png")
+    fun detailsDark() {
+        app(ThemeMode.DARK) { it.navigate("details/464963") }
+        compose.onRoot().captureRoboImage("$out/04_details_dark.png")
     }
 
     @Test
@@ -133,87 +165,129 @@ class ScreenshotTest {
     }
 
     @Test
+    fun search() {
+        app { it.navigate("search") }
+        compose.runOnUiThread { }
+        compose.onNodeWithText("Фильм, сериал или ссылка Кинопоиска…").performClick()
+        settle()
+        compose.onRoot().captureRoboImage("$out/06_search_empty.png")
+    }
+
+    @Test
     fun library() {
         runBlocking {
-            listOf(301, 326, 464963, 535341, 178707).forEach { id ->
-                container.library.toggleFavorite(container.movies.details(id).movie)
-            }
+            listOf(301, 326, 464963, 535341, 41519).forEach { id -> container.library.toggleFavorite(container.catalog.movie(id)) }
         }
         app { it.navigate("library") }
-        Thread.sleep(500)
-        settle()
-        compose.onRoot().captureRoboImage("$out/06_library.png")
+        compose.onRoot().captureRoboImage("$out/07_library.png")
     }
 
     @Test
     fun settings() {
         app { it.navigate("settings") }
-        compose.onRoot().captureRoboImage("$out/07_settings.png")
+        compose.onRoot().captureRoboImage("$out/08_settings.png")
     }
 
-    @Test
-    fun onboarding() {
-        compose.setContent { DopomineTheme { OnboardingScreen(onDone = {}) } }
-        settle()
-        compose.onRoot().captureRoboImage("$out/08_onboarding.png")
+    // ---- player ----------------------------------------------------------------------------
+
+    private fun playerSession() = PlayerSession().apply {
+        title = "Игра престолов"
+        subtitle = "Collaps · 1 сезон · 3 серия"
+        mode = Mode.NATIVE
+        controlsVisible = true
+        canPip = true
+        choices = listOf(
+            SourceChoice(SourceChoice.COLLAPS, "Collaps", "Прямой поток · озвучки, качество и серии в приложении", null),
+            SourceChoice("src:Alloha", "Alloha", "Поток через сайт · Дублированный · 4K", null),
+            SourceChoice("src:Turbo", "Turbo", "Поток через сайт", null),
+            SourceChoice(SourceChoice.SITE_PLAYER, "Плеер сайта", "Страница сайта без рекламы, без нативных функций", null),
+        )
+        currentChoice = SourceChoice.COLLAPS
+        val stream = Stream("https://x/y.m3u8", StreamFormat.HLS)
+        playable = Playable.Series("Collaps", (1..3).map { s -> Season(s, (1..10).map { e -> Episode(s, e, if (e == 1) "Зима близко" else null, stream) }) })
+        season = 1
+        episode = 3
+        resumedAt = 1325
+    }
+
+    private fun nativeState() = NativeState().apply {
+        isPlaying = true
+        buffering = false
+        positionMs = 1_325_000
+        durationMs = 3_720_000
+        bufferedMs = 1_700_000
+        audio = listOf(TrackOption("0:0", "LostFilm", null, true), TrackOption("1:0", "AlexFilm", null, false), TrackOption("2:0", "Оригинал", "5.1", false))
+        qualities = listOf(TrackOption("auto", "Авто", null, true), TrackOption("3:0", "1080p", "6.2 Мбит/с", false), TrackOption("3:1", "720p", null, false))
+    }
+
+    private object NoControls : PlayerControls {
+        override fun close() = Unit
+        override fun togglePlay() = Unit
+        override fun seekBy(ms: Long) = Unit
+        override fun seekTo(ms: Long) = Unit
+        override fun selectAudio(key: String) = Unit
+        override fun selectQuality(key: String) = Unit
+        override fun selectText(key: String) = Unit
+        override fun setSpeed(speed: Float) = Unit
+        override fun chooseSource(key: String) = Unit
+        override fun playEpisode(season: Int, episode: Int) = Unit
+        override fun hasNextEpisode() = true
+        override fun nextEpisode() = Unit
+        override fun openSheet(sheet: Sheet?) = Unit
+        override fun restartFromBeginning() = Unit
+        override fun cycleResize() = Unit
+        override fun rotate() = Unit
+        override fun enterPip() = Unit
+        override fun showSiteOverlay() = Unit
+        override fun hideSiteOverlay() = Unit
+        override fun canUseSiteOverlay() = false
+        override fun retry() = Unit
+        override fun readLevel(kind: GestureKind) = 0.5f
+        override fun setLevel(kind: GestureKind, value: Float) = Unit
+        override fun gestureEnd() = Unit
     }
 
     @Test
     @Config(qualifiers = "w880dp-h400dp-xxhdpi")
     fun playerControls() {
-        val ui = playerUi()
-        compose.setContent { DopomineTheme { PlayerOverlay(ui, NoActions) } }
-        settle()
+        val session = playerSession()
+        compose.setContent { DopomineTheme(ThemeMode.DARK) { PlayerScreen(session, nativeState(), NoControls, gesturesEnabled = true) } }
+        compose.mainClock.autoAdvance = false
+        compose.mainClock.advanceTimeBy(300)
         compose.onRoot().captureRoboImage("$out/09_player_controls.png")
     }
 
     @OptIn(ExperimentalRoborazziApi::class)
     @Test
     @Config(qualifiers = "w880dp-h400dp-xxhdpi")
-    fun playerSources() {
-        val ui = playerUi().apply { sourcesSheet = true }
-        compose.setContent { DopomineTheme { PlayerOverlay(ui, NoActions) } }
+    fun playerEpisodes() {
+        val session = playerSession().apply { sheet = Sheet.EPISODES }
+        compose.setContent { DopomineTheme(ThemeMode.DARK) { PlayerScreen(session, nativeState(), NoControls, gesturesEnabled = true) } }
         settle()
-        captureScreenRoboImage("$out/10_player_sources.png")
+        captureScreenRoboImage("$out/10_player_episodes.png")
+    }
+
+    @OptIn(ExperimentalRoborazziApi::class)
+    @Test
+    @Config(qualifiers = "w880dp-h400dp-xxhdpi")
+    fun playerVoices() {
+        val session = playerSession().apply { sheet = Sheet.AUDIO }
+        compose.setContent { DopomineTheme(ThemeMode.DARK) { PlayerScreen(session, nativeState(), NoControls, gesturesEnabled = true) } }
+        settle()
+        captureScreenRoboImage("$out/11_player_voices.png")
     }
 
     @Test
     @Config(qualifiers = "w880dp-h400dp-xxhdpi")
-    fun playerLoading() {
-        val ui = PlayerUiState().apply { title = "Матрица"; progress = 60 }
-        compose.setContent { DopomineTheme { PlayerOverlay(ui, NoActions) } }
+    fun playerResolving() {
+        val session = PlayerSession().apply { title = "Матрица"; status = "Collaps: получаем поток…" }
+        compose.setContent {
+            DopomineTheme(ThemeMode.DARK) {
+                CompositionLocalProvider(LocalAnimations provides false) { PlayerScreen(session, NativeState(), NoControls, gesturesEnabled = true) }
+            }
+        }
         compose.mainClock.autoAdvance = false
-        compose.mainClock.advanceTimeBy(500)
-        compose.onRoot().captureRoboImage("$out/11_player_loading.png")
-    }
-
-    private fun playerUi() = PlayerUiState().apply {
-        title = "Матрица"
-        subtitle = "1999"
-        loading = false
-        controlsVisible = true
-        canPip = true
-        blockedCount = 7
-        setSources(
-            listOf(
-                "Alloha · Оригинальный · BDRip",
-                "Collaps · Рус. Дублированный · FHD (1080p)",
-                "Turbo · Не указано · -",
-                "Veoveo · Русский. Авторский. CDV. AAC · -",
-                "Vibix · Профессиональный (дублированный) · FullHD",
-            ),
-            selected = 1,
-        )
-        resumedAt = 3723
-    }
-
-    private object NoActions : PlayerActions {
-        override fun close() = Unit
-        override fun reload() = Unit
-        override fun enterPip() = Unit
-        override fun rotate() = Unit
-        override fun selectSource(index: Int) = Unit
-        override fun restartFromBeginning() = Unit
-        override fun openSources() = Unit
+        compose.mainClock.advanceTimeBy(300)
+        compose.onRoot().captureRoboImage("$out/12_player_resolving.png")
     }
 }

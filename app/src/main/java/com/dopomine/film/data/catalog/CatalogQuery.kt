@@ -1,0 +1,126 @@
+package com.dopomine.film.data.catalog
+
+import androidx.compose.runtime.Immutable
+import java.util.Calendar
+
+enum class Kind(val label: String, val sql: String) {
+    FILMS("Фильмы", "type = 0"),
+    SERIES("Сериалы", "type IN (1, 2)"),
+    MINI("Мини-сериалы", "type = 2"),
+    SHOWS("ТВ-шоу", "type = 3"),
+    ALL("Всё", "1 = 1"),
+}
+
+enum class Sort(val label: String, val sql: String) {
+    TREND("Популярные сейчас", "trend DESC"),
+    POPULAR("Самые известные", "popularity DESC"),
+    RATING("По рейтингу", "kp_rating DESC, kp_votes DESC"),
+    NEW("Новые", "year DESC, popularity DESC"),
+}
+
+@Immutable
+data class YearRange(val label: String, val from: Int?, val to: Int?) {
+    companion object {
+        val currentYear: Int get() = Calendar.getInstance().get(Calendar.YEAR)
+
+        val options: List<YearRange>
+            get() {
+                val y = currentYear
+                return listOf(
+                    YearRange("Все годы", null, null),
+                    YearRange("${y - 1}–$y", y - 1, y),
+                    YearRange("2020–${y - 2}", 2020, y - 2),
+                    YearRange("2010-е", 2010, 2019),
+                    YearRange("2000-е", 2000, 2009),
+                    YearRange("1990-е", 1990, 1999),
+                    YearRange("1980-е", 1980, 1989),
+                    YearRange("До 1980", 1900, 1979),
+                )
+            }
+    }
+}
+
+/** A filtered, sorted slice of the catalog. Everything runs locally against SQLite. */
+@Immutable
+data class CatalogQuery(
+    val kind: Kind = Kind.FILMS,
+    val sort: Sort = Sort.TREND,
+    val genre: String? = null,
+    val animated: Boolean? = null,
+    val country: String? = null,
+    val yearFrom: Int? = null,
+    val yearTo: Int? = null,
+    val minRating: Double? = null,
+    val minVotes: Int = 0,
+) {
+    fun where(): Pair<String, List<Any?>> {
+        val parts = mutableListOf(kind.sql)
+        val args = mutableListOf<Any?>()
+        genre?.let { parts += "(genres & ?) != 0"; args += Genres.bit(it) }
+        animated?.let { parts += "animated = ?"; args += if (it) 1 else 0 }
+        country?.let { parts += "countries LIKE ?"; args += "%$it%" }
+        yearFrom?.let { parts += "year >= ?"; args += it }
+        yearTo?.let { parts += "year <= ?"; args += it }
+        minRating?.let { parts += "kp_rating >= ?"; args += it }
+        // rating sorts need enough votes to mean something
+        val votes = if (sort == Sort.RATING) maxOf(minVotes, if (kind == Kind.FILMS) 20_000 else 5_000) else minVotes
+        if (votes > 0) { parts += "kp_votes >= ?"; args += votes }
+        if (sort == Sort.NEW) parts += "year IS NOT NULL"
+        return parts.joinToString(" AND ") to args
+    }
+}
+
+@Immutable
+data class Section(val key: String, val title: String, val query: CatalogQuery)
+
+/** Home screen shelves; films and series have their own sets. */
+object Sections {
+    private val y get() = YearRange.currentYear
+
+    val films: List<Section>
+        get() = listOf(
+            Section("f_trend", "Популярные фильмы", CatalogQuery(Kind.FILMS, Sort.TREND, minVotes = 1000)),
+            Section("f_new", "Новинки", CatalogQuery(Kind.FILMS, Sort.POPULAR, yearFrom = y - 1)),
+            Section("f_top", "Топ Кинопоиска", CatalogQuery(Kind.FILMS, Sort.RATING, minVotes = 100_000)),
+            Section("f_action", "Боевики", CatalogQuery(Kind.FILMS, Sort.TREND, genre = "Боевик", minVotes = 2000)),
+            Section("f_comedy", "Комедии", CatalogQuery(Kind.FILMS, Sort.TREND, genre = "Комедия", minVotes = 2000)),
+            Section("f_scifi", "Фантастика", CatalogQuery(Kind.FILMS, Sort.TREND, genre = "Фантастика", minVotes = 2000)),
+            Section("f_thriller", "Триллеры", CatalogQuery(Kind.FILMS, Sort.TREND, genre = "Триллер", minVotes = 2000)),
+            Section("f_horror", "Ужасы", CatalogQuery(Kind.FILMS, Sort.TREND, genre = "Ужасы", minVotes = 2000)),
+            Section("f_drama", "Драмы", CatalogQuery(Kind.FILMS, Sort.TREND, genre = "Драма", minVotes = 2000)),
+            Section("f_crime", "Криминал", CatalogQuery(Kind.FILMS, Sort.TREND, genre = "Криминал", minVotes = 2000)),
+            Section("f_anim", "Мультфильмы", CatalogQuery(Kind.FILMS, Sort.TREND, animated = true, minVotes = 1000)),
+            Section("f_family", "Для всей семьи", CatalogQuery(Kind.FILMS, Sort.TREND, genre = "Семейный", minVotes = 1000)),
+            Section("f_hero", "Супергерои", CatalogQuery(Kind.FILMS, Sort.POPULAR, genre = "Супергерои")),
+            Section("f_adventure", "Приключения", CatalogQuery(Kind.FILMS, Sort.TREND, genre = "Приключения", minVotes = 2000)),
+            Section("f_fantasy", "Фэнтези", CatalogQuery(Kind.FILMS, Sort.TREND, genre = "Фэнтези", minVotes = 2000)),
+            Section("f_romance", "Мелодрамы", CatalogQuery(Kind.FILMS, Sort.TREND, genre = "Мелодрама", minVotes = 2000)),
+            Section("f_ru", "Российское кино", CatalogQuery(Kind.FILMS, Sort.TREND, country = "Россия", yearFrom = 2000, minVotes = 1000)),
+            Section("f_ussr", "Советская классика", CatalogQuery(Kind.FILMS, Sort.POPULAR, country = "СССР")),
+            Section("f_war", "Военные", CatalogQuery(Kind.FILMS, Sort.POPULAR, genre = "Военный")),
+            Section("f_doc", "Документальные", CatalogQuery(Kind.FILMS, Sort.POPULAR, genre = "Документальный")),
+        )
+
+    val series: List<Section>
+        get() = listOf(
+            Section("s_trend", "Популярные сериалы", CatalogQuery(Kind.SERIES, Sort.TREND, minVotes = 1000)),
+            Section("s_new", "Новые сериалы", CatalogQuery(Kind.SERIES, Sort.POPULAR, yearFrom = y - 1)),
+            Section("s_top", "Лучшие сериалы", CatalogQuery(Kind.SERIES, Sort.RATING, minVotes = 30_000)),
+            Section("s_mini", "Мини-сериалы", CatalogQuery(Kind.MINI, Sort.TREND)),
+            Section("s_drama", "Драмы", CatalogQuery(Kind.SERIES, Sort.TREND, genre = "Драма", minVotes = 1000)),
+            Section("s_comedy", "Комедийные", CatalogQuery(Kind.SERIES, Sort.TREND, genre = "Комедия", minVotes = 1000)),
+            Section("s_crime", "Криминал", CatalogQuery(Kind.SERIES, Sort.TREND, genre = "Криминал", minVotes = 1000)),
+            Section("s_detective", "Детективы", CatalogQuery(Kind.SERIES, Sort.TREND, genre = "Детектив", minVotes = 1000)),
+            Section("s_scifi", "Фантастика", CatalogQuery(Kind.SERIES, Sort.TREND, genre = "Фантастика", minVotes = 1000)),
+            Section("s_fantasy", "Фэнтези", CatalogQuery(Kind.SERIES, Sort.TREND, genre = "Фэнтези", minVotes = 1000)),
+            Section("s_thriller", "Триллеры", CatalogQuery(Kind.SERIES, Sort.TREND, genre = "Триллер", minVotes = 1000)),
+            Section("s_anime", "Аниме", CatalogQuery(Kind.SERIES, Sort.TREND, genre = "Аниме")),
+            Section("s_anim", "Мультсериалы", CatalogQuery(Kind.SERIES, Sort.TREND, animated = true)),
+            Section("s_ru", "Российские сериалы", CatalogQuery(Kind.SERIES, Sort.TREND, country = "Россия", minVotes = 1000)),
+            Section("s_kr", "Корейские дорамы", CatalogQuery(Kind.SERIES, Sort.TREND, country = "Корея")),
+            Section("s_doc", "Документальные", CatalogQuery(Kind.SERIES, Sort.POPULAR, genre = "Документальный")),
+            Section("s_show", "ТВ-шоу", CatalogQuery(Kind.SHOWS, Sort.TREND)),
+        )
+
+    fun byKey(key: String): Section? = (films + series).firstOrNull { it.key == key }
+}

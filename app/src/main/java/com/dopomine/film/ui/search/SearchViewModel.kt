@@ -1,13 +1,18 @@
 package com.dopomine.film.ui.search
 
 import android.content.Context
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.core.content.edit
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.dopomine.film.data.MovieRepository
+import com.dopomine.film.data.catalog.CatalogRepository
+import com.dopomine.film.data.model.Movie
 import com.dopomine.film.ui.common.KpLinks
 import com.dopomine.film.ui.common.PagedLoader
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -17,7 +22,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 @OptIn(FlowPreview::class)
-class SearchViewModel(private val movies: MovieRepository, context: Context) : ViewModel() {
+class SearchViewModel(private val catalog: CatalogRepository, context: Context) : ViewModel() {
     private val prefs = context.applicationContext.getSharedPreferences("search", Context.MODE_PRIVATE)
 
     private val _query = MutableStateFlow("")
@@ -26,37 +31,50 @@ class SearchViewModel(private val movies: MovieRepository, context: Context) : V
     private val _recent = MutableStateFlow(loadRecent())
     val recent: StateFlow<List<String>> = _recent.asStateFlow()
 
-    /** Kinopoisk id typed or pasted as a link. */
-    val directId: StateFlow<Int?> = MutableStateFlow<Int?>(null).also { flow ->
-        viewModelScope.launch { _query.collect { flow.value = KpLinks.extractId(it) } }
-    }
+    var directId by mutableStateOf<Int?>(null)
+        private set
+
+    /** Titles found on Wikidata that the offline catalog does not have. */
+    var online by mutableStateOf<List<Movie>?>(null)
+        private set
+    var onlineLoading by mutableStateOf(false)
+        private set
+    private var onlineJob: Job? = null
 
     private var activeQuery = ""
-    val loader = PagedLoader(viewModelScope) { page -> movies.search(activeQuery, page) }
+    val loader = PagedLoader(viewModelScope) { page -> catalog.search(activeQuery, page) }
 
     init {
         viewModelScope.launch {
-            _query
-                .map { it.trim() }
-                .debounce(450)
-                .distinctUntilChanged()
-                .collect { q ->
-                    activeQuery = q
-                    if (q.length >= 2 && KpLinks.extractId(q) == null) loader.reset()
-                }
+            _query.map { it.trim() }.debounce(250).distinctUntilChanged().collect { q ->
+                activeQuery = q
+                directId = KpLinks.extractId(q)
+                online = null
+                onlineJob?.cancel()
+                if (q.length >= 2 && directId == null) loader.reset()
+            }
         }
     }
-
-    val hasQuery: Boolean get() = activeQuery.length >= 2
 
     fun setQuery(value: String) {
         _query.value = value
     }
 
+    fun searchOnline() {
+        val q = activeQuery
+        if (q.length < 2) return
+        onlineJob?.cancel()
+        onlineLoading = true
+        onlineJob = viewModelScope.launch {
+            online = runCatching { catalog.searchOnline(q, loader.items.map { it.id }.toSet()) }.getOrDefault(emptyList())
+            onlineLoading = false
+        }
+    }
+
     fun submit() {
         val q = _query.value.trim()
         if (q.length < 2) return
-        val list = (listOf(q) + _recent.value.filterNot { it.equals(q, ignoreCase = true) }).take(10)
+        val list = (listOf(q) + _recent.value.filterNot { it.equals(q, ignoreCase = true) }).take(12)
         _recent.value = list
         prefs.edit { putString("recent", list.joinToString("\n")) }
     }

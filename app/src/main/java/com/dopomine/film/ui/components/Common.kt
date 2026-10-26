@@ -1,18 +1,14 @@
 package com.dopomine.film.ui.components
 
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -26,262 +22,163 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
-import androidx.compose.material.icons.rounded.CloudOff
-import androidx.compose.material.icons.rounded.Key
-import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material.icons.rounded.SearchOff
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.dopomine.film.data.AppException
-import com.dopomine.film.data.ErrorKind
-import com.dopomine.film.ui.theme.Palette
+import com.dopomine.film.ui.theme.Radius
+import com.dopomine.film.ui.theme.T
+import com.dopomine.film.ui.theme.Type
+import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
 
-/** Animated placeholder brush for skeleton loading. */
+/** Mono uppercase label — splicer's `.caps`. */
 @Composable
-fun shimmerBrush(): Brush {
-    val transition = rememberInfiniteTransition(label = "shimmer")
-    val x by transition.animateFloat(
-        initialValue = -400f,
-        targetValue = 1200f,
-        animationSpec = infiniteRepeatable(tween(1300, easing = LinearEasing), RepeatMode.Restart),
-        label = "shimmerX",
-    )
-    return Brush.linearGradient(
-        colors = listOf(Palette.SurfaceHigh, Palette.SurfaceHighest, Palette.SurfaceHigh),
-        start = Offset(x, 0f),
-        end = Offset(x + 400f, 400f),
-    )
+fun Caps(text: String, modifier: Modifier = Modifier, color: Color = T.text3) {
+    Text(text.uppercase(), style = Type.caps, color = color, modifier = modifier, maxLines = 1, overflow = TextOverflow.Ellipsis)
 }
 
+/** Pill button — splicer's `.btn` (outlined) and `.btn.primary` (filled with the text color). */
 @Composable
-fun SkeletonBox(modifier: Modifier = Modifier, corner: Dp = 12.dp) {
-    Box(modifier.clip(RoundedCornerShape(corner)).background(shimmerBrush()))
-}
-
-@Composable
-fun SectionHeader(title: String, modifier: Modifier = Modifier, onSeeAll: (() -> Unit)? = null) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-        if (onSeeAll != null) {
-            Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(50))
-                    .clickable(onClick = onSeeAll)
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("Все", style = MaterialTheme.typography.labelLarge, color = Palette.TextSecondary)
-                Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = Palette.TextSecondary, modifier = Modifier.size(20.dp))
-            }
-        }
-    }
-}
-
-@Composable
-fun LoadingBox(modifier: Modifier = Modifier) {
-    Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary, strokeWidth = 3.dp)
-    }
-}
-
-@Composable
-fun MessageState(
-    icon: ImageVector,
-    title: String,
-    modifier: Modifier = Modifier,
-    subtitle: String? = null,
-    actionLabel: String? = null,
-    onAction: (() -> Unit)? = null,
-    secondaryLabel: String? = null,
-    onSecondary: (() -> Unit)? = null,
-) {
-    Column(
-        modifier = modifier.padding(32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Box(
-            Modifier
-                .size(72.dp)
-                .clip(CircleShape)
-                .background(Palette.SurfaceHigh),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(icon, null, tint = Palette.TextSecondary, modifier = Modifier.size(34.dp))
-        }
-        Spacer(Modifier.height(16.dp))
-        Text(title, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
-        if (subtitle != null) {
-            Spacer(Modifier.height(6.dp))
-            Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = Palette.TextSecondary, textAlign = TextAlign.Center)
-        }
-        if (actionLabel != null && onAction != null) {
-            Spacer(Modifier.height(16.dp))
-            GradientButton(text = actionLabel, onClick = onAction)
-        }
-        if (secondaryLabel != null && onSecondary != null) {
-            TextButton(onClick = onSecondary) { Text(secondaryLabel) }
-        }
-    }
-}
-
-/** Error placeholder that offers the right fix: settings for key problems, retry otherwise. */
-@Composable
-fun ErrorState(
-    error: AppException,
-    onRetry: () -> Unit,
-    onOpenSettings: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val icon = when (error.kind) {
-        ErrorKind.NO_KEY, ErrorKind.BAD_KEY, ErrorKind.QUOTA -> Icons.Rounded.Key
-        ErrorKind.NOT_FOUND -> Icons.Rounded.SearchOff
-        ErrorKind.NETWORK -> Icons.Rounded.CloudOff
-        else -> Icons.Rounded.Refresh
-    }
-    if (error.needsKey || error.kind == ErrorKind.QUOTA) {
-        MessageState(
-            icon = icon,
-            title = error.userMessage,
-            modifier = modifier,
-            actionLabel = "Открыть настройки",
-            onAction = onOpenSettings,
-            secondaryLabel = "Повторить",
-            onSecondary = onRetry,
-        )
-    } else {
-        MessageState(icon = icon, title = error.userMessage, modifier = modifier, actionLabel = "Повторить", onAction = onRetry)
-    }
-}
-
-@Composable
-fun GradientButton(
+fun Pill(
     text: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     icon: ImageVector? = null,
-    height: Dp = 48.dp,
+    primary: Boolean = false,
+    large: Boolean = false,
+    trailing: ImageVector? = null,
 ) {
+    val shape = RoundedCornerShape(999.dp)
     Row(
-        modifier = modifier
-            .height(height)
-            .clip(RoundedCornerShape(14.dp))
-            .background(Palette.AccentGradient)
+        modifier
+            .height(if (large) 46.dp else 36.dp)
+            .clip(shape)
+            .background(if (primary) T.accent else T.surface)
+            .border(1.dp, if (primary) T.accent else T.border, shape)
             .clickable(onClick = onClick)
-            .padding(horizontal = 22.dp),
+            .padding(horizontal = if (large) 22.dp else 15.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {
+        val tint = if (primary) T.accentFg else T.text
         if (icon != null) {
-            Icon(icon, null, tint = Color.White, modifier = Modifier.size(24.dp))
+            Icon(icon, null, tint = tint, modifier = Modifier.size(if (large) 20.dp else 16.dp))
             Spacer(Modifier.width(8.dp))
         }
-        Text(text, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+        Text(text, style = if (large) Type.button.copy(fontSize = Type.mono.fontSize * 1.1f) else Type.button, color = tint, maxLines = 1)
+        if (trailing != null) {
+            Spacer(Modifier.width(4.dp))
+            Icon(trailing, null, tint = if (primary) T.accentFg else T.text3, modifier = Modifier.size(16.dp))
+        }
     }
 }
 
-/** Two-option pill switch, e.g. "Фильмы / Сериалы". */
+/** Small toggle chip — splicer's `.chip` / `.chip.on`. */
 @Composable
-fun PillSwitch(options: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
+fun Chip(text: String, on: Boolean = false, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(999.dp)
+    Text(
+        text,
+        style = Type.monoSmall,
+        color = if (on) T.accentFg else T.text2,
+        maxLines = 1,
+        modifier = modifier
+            .clip(shape)
+            .background(if (on) T.accent else T.surface)
+            .border(1.dp, if (on) T.accent else T.border, shape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 11.dp, vertical = 7.dp),
+    )
+}
+
+/** Segmented control — splicer's `.segmented` ("Любой / Ваншоты / Лупы"). */
+@Composable
+fun Segmented(options: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
+    val shape = RoundedCornerShape(999.dp)
     Row(
         modifier
-            .clip(RoundedCornerShape(50))
-            .background(Palette.Surface)
-            .padding(4.dp),
+            .clip(shape)
+            .background(T.surface2)
+            .border(1.dp, T.border, shape)
+            .padding(3.dp),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        options.forEachIndexed { index, label ->
-            val active = index == selected
+        options.forEachIndexed { i, label ->
+            val active = i == selected
             Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(50))
-                    .then(if (active) Modifier.background(Palette.AccentGradient) else Modifier)
-                    .clickable { onSelect(index) }
-                    .padding(horizontal = 18.dp, vertical = 8.dp),
+                Modifier
+                    .clip(shape)
+                    .then(if (active) Modifier.background(T.surface).border(1.dp, T.border, shape) else Modifier)
+                    .clickable { onSelect(i) }
+                    .padding(horizontal = 14.dp, vertical = 7.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    label,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = if (active) Color.White else Palette.TextSecondary,
-                )
+                Text(label, style = Type.button, color = if (active) T.text else T.text2)
             }
         }
     }
 }
 
-/** The brand mark: a film reel with a play-shaped cut-out, same geometry as the launcher icon. */
 @Composable
-fun LogoMark(size: Dp, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(size)) {
-        val s = this.size.minDimension / 60f // geometry is defined on a 60x60 grid
-        val c = Offset(this.size.width / 2, this.size.height / 2)
-        val path = Path().apply {
-            fillType = PathFillType.EvenOdd
-            addOval(androidx.compose.ui.geometry.Rect(c, 30f * s))
-            for (k in 0 until 5) {
-                val a = Math.toRadians(-90.0 + k * 72.0)
-                val hc = Offset(c.x + (17f * s * cos(a)).toFloat(), c.y + (17f * s * sin(a)).toFloat())
-                addOval(androidx.compose.ui.geometry.Rect(hc, 6.5f * s))
-            }
-            val r = 7.5f * s
-            moveTo(c.x + r, c.y)
-            lineTo(c.x - r / 2, c.y + r * 0.866f)
-            lineTo(c.x - r / 2, c.y - r * 0.866f)
-            close()
+fun IconBtn(icon: ImageVector, description: String, onClick: () -> Unit, modifier: Modifier = Modifier, active: Boolean = false) {
+    Box(
+        modifier
+            .size(40.dp)
+            .clip(CircleShape)
+            .background(if (active) T.accent else Color.Transparent)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, description, tint = if (active) T.accentFg else T.text2, modifier = Modifier.size(21.dp))
+    }
+}
+
+/** White card with a hairline border — splicer's `.card`. */
+@Composable
+fun Card(modifier: Modifier = Modifier, padding: Dp = 16.dp, content: @Composable () -> Unit) {
+    Column(
+        modifier
+            .clip(RoundedCornerShape(Radius.card))
+            .background(T.surface)
+            .border(1.dp, T.border, RoundedCornerShape(Radius.card))
+            .padding(padding),
+    ) { content() }
+}
+
+@Composable
+fun SectionHeader(title: String, modifier: Modifier = Modifier, caption: String? = null, onSeeAll: (() -> Unit)? = null) {
+    Row(
+        modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            if (caption != null) Caps(caption)
+            Text(title, style = Type.title, color = T.text)
         }
-        drawPath(path, Palette.LogoGradient)
+        if (onSeeAll != null) {
+            Row(
+                Modifier.clip(RoundedCornerShape(999.dp)).clickable(onClick = onSeeAll).padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Все", style = Type.button, color = T.text2)
+                Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = T.text3, modifier = Modifier.size(18.dp))
+            }
+        }
     }
-}
-
-@Composable
-fun Logo(modifier: Modifier = Modifier) {
-    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
-        LogoMark(28.dp)
-        Spacer(Modifier.width(8.dp))
-        Text(
-            buildAnnotatedString {
-                withStyle(SpanStyle(fontWeight = FontWeight.Black)) { append("dopo") }
-                withStyle(SpanStyle(fontWeight = FontWeight.Light)) { append("mine") }
-            },
-            fontSize = 22.sp,
-            letterSpacing = (-0.5).sp,
-            color = Palette.TextPrimary,
-        )
-    }
-}
-
-@Composable
-fun EmptyHint(icon: ImageVector, title: String, modifier: Modifier = Modifier, subtitle: String? = null) {
-    MessageState(icon = icon, title = title, subtitle = subtitle, modifier = modifier.fillMaxWidth())
 }
 
 @Composable
@@ -289,29 +186,92 @@ fun TopBar(
     title: String,
     onBack: (() -> Unit)?,
     modifier: Modifier = Modifier,
-    actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {},
+    actions: @Composable RowScope.() -> Unit = {},
 ) {
     Row(
-        modifier
-            .fillMaxWidth()
-            .statusBarsPadding()
-            .padding(horizontal = 4.dp, vertical = 4.dp),
+        modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 6.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (onBack != null) {
-            androidx.compose.material3.IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Назад")
-            }
-        } else {
-            Spacer(Modifier.width(12.dp))
-        }
-        Text(
-            title,
-            style = MaterialTheme.typography.titleLarge,
-            maxLines = 1,
-            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f).padding(start = 4.dp),
-        )
+        if (onBack != null) IconBtn(Icons.AutoMirrored.Rounded.ArrowBack, "Назад", onBack) else Spacer(Modifier.width(10.dp))
+        Text(title, style = Type.title, color = T.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(start = 6.dp))
         actions()
     }
+}
+
+@Composable
+fun LoadingBox(modifier: Modifier = Modifier) {
+    Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        CircularProgressIndicator(color = T.text, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
+    }
+}
+
+/** Empty / error placeholder with halftone art, like splicer's empty screens. */
+@Composable
+fun MessageState(
+    title: String,
+    modifier: Modifier = Modifier,
+    subtitle: String? = null,
+    seed: Int = 5,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
+) {
+    Column(modifier.padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Halftone(HalftoneVariant.GLYPH, Modifier.size(110.dp), seed = seed, cell = 5.dp)
+        Spacer(Modifier.height(14.dp))
+        Text(title, style = Type.subtitle, color = T.text, textAlign = TextAlign.Center)
+        if (subtitle != null) {
+            Spacer(Modifier.height(4.dp))
+            Text(subtitle, style = Type.mono, color = T.text3, textAlign = TextAlign.Center)
+        }
+        if (actionLabel != null && onAction != null) {
+            Spacer(Modifier.height(16.dp))
+            Pill(actionLabel, onAction, primary = true)
+        }
+    }
+}
+
+@Composable
+fun ErrorState(error: AppException, onRetry: () -> Unit, modifier: Modifier = Modifier) {
+    MessageState(error.userMessage, modifier, seed = 13, actionLabel = "Повторить", onAction = onRetry)
+}
+
+@Composable
+fun EmptyHint(title: String, modifier: Modifier = Modifier, subtitle: String? = null, seed: Int = 21) {
+    MessageState(title, modifier.fillMaxWidth(), subtitle = subtitle, seed = seed)
+}
+
+/** The brand mark: rays from the center, same geometry as the launcher icon. */
+@Composable
+fun LogoMark(size: Dp, modifier: Modifier = Modifier, color: Color = T.text) {
+    Canvas(modifier.size(size)) {
+        val c = Offset(this.size.width / 2, this.size.height / 2)
+        val outer = this.size.minDimension / 2
+        val inner = outer * 0.1f
+        val rays = 24
+        val step = 2 * PI / rays
+        val half = step * 0.55 / 2
+        val path = Path()
+        for (k in 0 until rays) {
+            val a = -PI / 2 + k * step
+            path.moveTo(c.x + (inner * cos(a)).toFloat(), c.y + (inner * sin(a)).toFloat())
+            path.lineTo(c.x + (outer * cos(a - half)).toFloat(), c.y + (outer * sin(a - half)).toFloat())
+            path.lineTo(c.x + (outer * cos(a + half)).toFloat(), c.y + (outer * sin(a + half)).toFloat())
+            path.close()
+        }
+        drawPath(path, color)
+    }
+}
+
+@Composable
+fun Logo(modifier: Modifier = Modifier) {
+    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+        LogoMark(26.dp)
+        Spacer(Modifier.width(9.dp))
+        Text("dopomine", style = Type.title.copy(fontSize = Type.title.fontSize * 1.08f), color = T.text)
+    }
+}
+
+@Composable
+fun Divider(modifier: Modifier = Modifier) {
+    Box(modifier.fillMaxWidth().height(1.dp).background(T.border))
 }

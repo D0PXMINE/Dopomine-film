@@ -1,13 +1,9 @@
 package com.dopomine.film.ui.catalog
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -21,12 +17,14 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.SwapVert
+import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -39,167 +37,125 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.dopomine.film.data.model.Genres
-import com.dopomine.film.data.model.SortOrder
-import com.dopomine.film.data.model.YearRange
+import com.dopomine.film.data.catalog.Genres
+import com.dopomine.film.data.catalog.Kind
+import com.dopomine.film.data.catalog.Sort
+import com.dopomine.film.data.catalog.YearRange
+import com.dopomine.film.ui.common.ContentCard
 import com.dopomine.film.ui.common.appViewModel
+import com.dopomine.film.ui.components.Caps
+import com.dopomine.film.ui.components.Chip
+import com.dopomine.film.ui.components.Divider
 import com.dopomine.film.ui.components.MovieGrid
-import com.dopomine.film.ui.components.PillSwitch
+import com.dopomine.film.ui.components.Pill
+import com.dopomine.film.ui.components.Segmented
 import com.dopomine.film.ui.navigation.BottomBarSpace
 import com.dopomine.film.ui.navigation.Nav
-import com.dopomine.film.ui.theme.Palette
+import com.dopomine.film.ui.theme.T
+import com.dopomine.film.ui.theme.Type
 
-private enum class Sheet { SORT, GENRE, YEARS, RATING, KIND }
+private enum class Sheet { SORT, YEARS, RATING }
+
+private val kinds = listOf(Kind.FILMS, Kind.SERIES, Kind.MINI, Kind.SHOWS)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CatalogScreen(nav: Nav) {
-    val vm = appViewModel { c, _ -> CatalogViewModel(c.movies) }
-    val filters by vm.filters.collectAsStateWithLifecycle()
+    val vm = appViewModel { c, _ -> CatalogViewModel(c.catalog) }
+    val q by vm.query.collectAsStateWithLifecycle()
     var sheet by rememberSaveable { mutableStateOf<Sheet?>(null) }
-    val gridState = rememberLazyGridState()
-
-    LaunchedEffect(filters) { gridState.scrollToItem(0) }
+    val grid = rememberLazyGridState()
+    LaunchedEffect(q) { grid.scrollToItem(0) }
 
     Column(Modifier.fillMaxSize()) {
-        Column(Modifier.statusBarsPadding().padding(top = 8.dp)) {
-            Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Каталог", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
-                PillSwitch(
-                    options = listOf("Фильмы", "Сериалы"),
-                    selected = if (filters.isSeries) 1 else 0,
-                    onSelect = { vm.setSeries(it == 1) },
+        Text("Каталог", style = Type.display, color = T.text, modifier = Modifier.statusBarsPadding().padding(start = 20.dp, top = 10.dp, bottom = 10.dp))
+        ContentCard {
+            Column(Modifier.fillMaxSize()) {
+                Column(Modifier.padding(top = 14.dp)) {
+                    Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 14.dp)) {
+                        Segmented(kinds.map { it.label }, kinds.indexOf(q.kind).coerceAtLeast(0), { i -> vm.update { it.copy(kind = kinds[i]) } })
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 14.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Pill(q.sort.label, { sheet = Sheet.SORT }, icon = Icons.Rounded.SwapVert, trailing = Icons.Rounded.KeyboardArrowDown)
+                        val years = YearRange.options.firstOrNull { it.from == q.yearFrom && it.to == q.yearTo } ?: YearRange.options.first()
+                        Pill(years.label, { sheet = Sheet.YEARS }, icon = Icons.Outlined.CalendarMonth, trailing = Icons.Rounded.KeyboardArrowDown, primary = q.yearFrom != null)
+                        Pill(q.minRating?.let { "КП ${it.toInt()}+" } ?: "Рейтинг", { sheet = Sheet.RATING }, icon = Icons.Outlined.StarOutline,
+                            trailing = Icons.Rounded.KeyboardArrowDown, primary = q.minRating != null)
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 14.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Chip("все жанры", on = q.genre == null && q.animated == null) { vm.update { it.copy(genre = null, animated = null) } }
+                        Genres.filterable.forEach { g ->
+                            Chip(g.lowercase(), on = q.genre == g) { vm.update { it.copy(genre = if (it.genre == g) null else g, animated = null) } }
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Divider()
+                }
+                MovieGrid(
+                    loader = vm.loader,
+                    onMovieClick = { nav.details(it.id) },
+                    state = grid,
+                    contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 12.dp, bottom = BottomBarSpace + 16.dp),
                 )
             }
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                if (filters.isSeries) {
-                    FilterChipButton(filters.kind.label, active = filters.kind != CatalogKind.SERIES) { sheet = Sheet.KIND }
-                }
-                FilterChipButton(filters.sort.label, active = filters.sort != SortOrder.POPULAR) { sheet = Sheet.SORT }
-                FilterChipButton(filters.genre?.second ?: "Жанр", active = filters.genre != null) { sheet = Sheet.GENRE }
-                FilterChipButton(filters.years.label, active = filters.years.from != null) { sheet = Sheet.YEARS }
-                FilterChipButton(filters.minRating?.let { "Рейтинг $it+" } ?: "Рейтинг", active = filters.minRating != null) { sheet = Sheet.RATING }
-            }
         }
-        MovieGrid(
-            loader = vm.loader,
-            onMovieClick = { nav.details(it.id) },
-            onOpenSettings = nav::settings,
-            state = gridState,
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = BottomBarSpace + 16.dp),
-        )
     }
 
     val current = sheet
     if (current != null) {
-        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ModalBottomSheet(
             onDismissRequest = { sheet = null },
-            sheetState = sheetState,
-            containerColor = Palette.Surface,
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            containerColor = T.surface,
         ) {
-            val close = { sheet = null }
-            when (current) {
-                Sheet.KIND -> OptionList(
-                    title = "Тип",
-                    options = CatalogKind.entries.filter { it.series }.map { it.label },
-                    selected = filters.kind.label,
-                ) { label -> vm.update { f -> f.copy(kind = CatalogKind.entries.first { it.label == label }) }; close() }
-                Sheet.SORT -> OptionList(
-                    title = "Сортировка",
-                    options = SortOrder.entries.map { it.label },
-                    selected = filters.sort.label,
-                ) { label -> vm.update { f -> f.copy(sort = SortOrder.entries.first { it.label == label }) }; close() }
-                Sheet.YEARS -> OptionList(
-                    title = "Годы выхода",
-                    options = YearRange.options.map { it.label },
-                    selected = filters.years.label,
-                ) { label -> vm.update { f -> f.copy(years = YearRange.options.first { it.label == label }) }; close() }
-                Sheet.RATING -> OptionList(
-                    title = "Рейтинг Кинопоиска",
-                    options = listOf("Любой", "6+", "7+", "8+"),
-                    selected = filters.minRating?.let { "$it+" } ?: "Любой",
-                ) { label -> vm.update { f -> f.copy(minRating = label.removeSuffix("+").toIntOrNull()) }; close() }
-                Sheet.GENRE -> GenreGrid(selected = filters.genre?.first) { genre -> vm.update { f -> f.copy(genre = genre) }; close() }
+            Column(Modifier.navigationBarsPadding().padding(bottom = 12.dp)) {
+                when (current) {
+                    Sheet.SORT -> Options("Сортировка", Sort.entries.map { it.label }, q.sort.label) { l ->
+                        vm.update { it.copy(sort = Sort.entries.first { s -> s.label == l }) }
+                        sheet = null
+                    }
+                    Sheet.YEARS -> {
+                        val selected = YearRange.options.firstOrNull { it.from == q.yearFrom && it.to == q.yearTo }?.label ?: YearRange.options.first().label
+                        Options("Годы выхода", YearRange.options.map { it.label }, selected) { l ->
+                            val r = YearRange.options.first { it.label == l }
+                            vm.update { it.copy(yearFrom = r.from, yearTo = r.to) }
+                            sheet = null
+                        }
+                    }
+                    Sheet.RATING -> Options("Рейтинг Кинопоиска", listOf("Любой", "6+", "7+", "8+"), q.minRating?.let { "${it.toInt()}+" } ?: "Любой") { l ->
+                        vm.update { it.copy(minRating = l.removeSuffix("+").toDoubleOrNull()) }
+                        sheet = null
+                    }
+                }
             }
         }
     }
 }
 
 @Composable
-private fun FilterChipButton(label: String, active: Boolean, onClick: () -> Unit) {
-    Row(
-        Modifier
-            .clip(RoundedCornerShape(50))
-            .background(if (active) Palette.Accent.copy(alpha = 0.18f) else Palette.Surface)
-            .clickable(onClick = onClick)
-            .padding(start = 14.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(label, style = MaterialTheme.typography.labelLarge, color = if (active) Palette.Accent else Palette.TextPrimary)
-        Icon(Icons.Rounded.KeyboardArrowDown, null, tint = if (active) Palette.Accent else Palette.TextSecondary, modifier = Modifier.size(18.dp))
-    }
-}
-
-@Composable
-private fun OptionList(title: String, options: List<String>, selected: String, onSelect: (String) -> Unit) {
-    Column(Modifier.navigationBarsPadding().padding(bottom = 16.dp)) {
-        Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
-        options.forEach { option ->
-            val active = option == selected
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable { onSelect(option) }
-                    .padding(horizontal = 24.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(option, style = MaterialTheme.typography.bodyLarge, color = if (active) Palette.Accent else Palette.TextPrimary, modifier = Modifier.weight(1f))
-                if (active) Box(Modifier.size(8.dp).clip(RoundedCornerShape(50)).background(Palette.Accent))
-            }
+private fun Options(title: String, options: List<String>, selected: String, onPick: (String) -> Unit) {
+    Caps(title, Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
+    options.forEach { o ->
+        val active = o == selected
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp).clip(RoundedCornerShape(12.dp))
+                .clickable { onPick(o) }
+                .padding(horizontal = 12.dp, vertical = 13.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(o, style = Type.item, color = T.text, modifier = Modifier.weight(1f))
+            if (active) Icon(Icons.Rounded.Check, null, tint = T.text, modifier = Modifier.size(20.dp))
         }
     }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun GenreGrid(selected: Int?, onSelect: (Pair<Int, String>?) -> Unit) {
-    Column(
-        Modifier
-            .navigationBarsPadding()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp)
-            .padding(bottom = 20.dp),
-    ) {
-        Text("Жанр", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(start = 4.dp, bottom = 12.dp))
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            GenreChip("Все жанры", selected == null) { onSelect(null) }
-            Genres.all.forEach { genre -> GenreChip(genre.second, selected == genre.first) { onSelect(genre) } }
-        }
-        Spacer(Modifier.height(8.dp))
-    }
-}
-
-@Composable
-private fun GenreChip(label: String, active: Boolean, onClick: () -> Unit) {
-    Text(
-        label,
-        style = MaterialTheme.typography.labelLarge,
-        color = if (active) Color.White else Palette.TextPrimary,
-        modifier = Modifier
-            .clip(RoundedCornerShape(50))
-            .then(if (active) Modifier.background(Palette.AccentGradient) else Modifier.background(Palette.SurfaceHigh))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 9.dp),
-    )
 }
 

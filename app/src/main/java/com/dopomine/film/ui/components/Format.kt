@@ -28,38 +28,44 @@ object Format {
     }
 
     fun clock(totalSeconds: Int): String {
-        val h = totalSeconds / 3600
-        val m = (totalSeconds % 3600) / 60
-        val s = totalSeconds % 60
-        return if (h > 0) String.format(Locale.US, "%d:%02d:%02d", h, m, s) else String.format(Locale.US, "%d:%02d", m, s)
+        val s = totalSeconds.coerceAtLeast(0)
+        val h = s / 3600
+        val m = (s % 3600) / 60
+        val sec = s % 60
+        return if (h > 0) String.format(Locale.US, "%d:%02d:%02d", h, m, sec) else String.format(Locale.US, "%d:%02d", m, sec)
     }
 
-    fun typeLabel(type: ContentType) = if (type == ContentType.SERIES) "Сериал" else "Фильм"
+    fun typeLabel(type: ContentType) = when (type) {
+        ContentType.FILM -> "фильм"
+        ContentType.SERIES -> "сериал"
+        ContentType.MINI -> "мини-сериал"
+        ContentType.SHOW -> "шоу"
+    }
 
-    /** "2024 · Драма, Комедия" */
-    fun subtitle(movie: Movie, genres: Int = 2): String =
-        listOfNotNull(movie.year?.toString(), movie.genres.take(genres).joinToString(", ").ifBlank { null })
-            .joinToString(" · ")
+    /** "2024 · драма, комедия" in lower case, like splicer's mono tag lines. */
+    fun meta(movie: Movie, genres: Int = 2): String =
+        listOfNotNull(
+            movie.year?.toString(),
+            movie.genres.take(genres).joinToString(", ") { it.lowercase() }.ifBlank { null },
+        ).joinToString(" · ")
 
-    fun seasons(count: Int): String {
-        val mod10 = count % 10
-        val mod100 = count % 100
+    /** "КП 8.5 · IMDb 8.7" */
+    fun ratings(movie: Movie): String? =
+        listOfNotNull(movie.ratingKp?.let { "КП ${rating(it)}" }, movie.ratingImdb?.let { "IMDb ${rating(it)}" })
+            .joinToString(" · ").ifBlank { null }
+
+    fun plural(n: Int, one: String, few: String, many: String): String {
+        val mod10 = n % 10
+        val mod100 = n % 100
         val word = when {
-            mod10 == 1 && mod100 != 11 -> "сезон"
-            mod10 in 2..4 && mod100 !in 12..14 -> "сезона"
-            else -> "сезонов"
+            mod10 == 1 && mod100 != 11 -> one
+            mod10 in 2..4 && mod100 !in 12..14 -> few
+            else -> many
         }
-        return "$count $word"
+        return "$n $word"
     }
 
-    fun episodes(count: Int): String {
-        val mod10 = count % 10
-        val mod100 = count % 100
-        val word = when {
-            mod10 == 1 && mod100 != 11 -> "серия"
-            mod10 in 2..4 && mod100 !in 12..14 -> "серии"
-            else -> "серий"
-        }
-        return "$count $word"
-    }
+    fun seasons(n: Int) = plural(n, "сезон", "сезона", "сезонов")
+    fun episodes(n: Int) = plural(n, "серия", "серии", "серий")
+    fun titles(n: Int) = plural(n, "фильм", "фильма", "фильмов")
 }

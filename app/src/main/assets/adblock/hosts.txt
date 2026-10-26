@@ -6486,7 +6486,6 @@ ensurania.com
 entercash.ru
 entercasino.com
 entimee.com
-entitlements.jwplayer.com
 entitlements.kochava.com
 entovoc.ru
 entrecard.s3.amazonaws.com
@@ -8588,7 +8587,6 @@ images9.engageya.com
 imagesrv.adition.com
 imamby.ru
 imarker.ru
-imasdk.googleapis.com
 imces.inmobi.com
 imeteti.info
 img-cdn.clinch.co

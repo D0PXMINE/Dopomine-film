@@ -56,8 +56,8 @@ class AdBlocker(context: Context, scope: CoroutineScope) {
     companion object {
         /** Typical VAST/VPAID/ad-server request patterns used by embedded video players. */
         private val AD_URL = Regex(
-            "(^|[/._?&=-])(vast|vpaid|vmap|preroll|midroll|adfox|prebid|adserver|adsystem|adframe|banners?)([/._?&=-]|$)" +
-                "|/ads?/|/advert|/getcode\\?|/rtb/|[?&](ad_?type|adunit|ad_?id)="
+            "(^|[/._?&=-])(vast|vpaid|vmap|preroll|midroll|adfox|prebid|adserver|adsystem)([/._?&=-]|$)" +
+                "|/advert|/rtb/|[?&](adunit|ad_?type)="
         )
 
         fun blockedResponse(): WebResourceResponse =

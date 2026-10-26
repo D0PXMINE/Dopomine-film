@@ -114,9 +114,12 @@
         switch (e.type) {
             case 'loadstart':
                 v.__dpmAnnounced = false;
+                reportSource(v);
                 break;
             case 'playing':
                 active = v;
+                reportSource(v);
+                if (window.__dpmSniff) { v.muted = true; }
                 if (d >= MIN_DURATION && !v.__dpmAnnounced) {
                     v.__dpmAnnounced = true;
                     post({ type: 'video', t: v.currentTime, d: d });
@@ -141,6 +144,45 @@
                 }
                 break;
         }
+    }
+
+    // A <video src="…m3u8"> is played by the system media stack and never shows up as a page
+    // request, so its address is reported directly.
+    function reportSource(v) {
+        var src = v.currentSrc || v.src || '';
+        if (/^https?:/.test(src) && src !== v.__dpmSrc) {
+            v.__dpmSrc = src;
+            post({ type: 'media', url: src, referer: location.href });
+        }
+    }
+
+    // Sniff mode: the page plays hidden behind the native player only to reveal its stream.
+    // Keep it silent and nudge players that wait for a click on their play button.
+    if (window.__dpmSniff) {
+        var nudges = 0;
+        var nudge = setInterval(function () {
+            nudges++;
+            if (nudges > 25 || !document.body) { if (nudges > 25) clearInterval(nudge); return; }
+            var videos = document.getElementsByTagName('video');
+            for (var i = 0; i < videos.length; i++) {
+                var v = videos[i];
+                v.muted = true;
+                if (v.paused && (v.currentSrc || v.src)) { try { v.play().catch(function () { }); } catch (e) { } }
+            }
+            if (nudges === 3 || nudges === 8) {
+                var w = window.innerWidth, h = window.innerHeight;
+                var cands = document.querySelectorAll('[class*="play" i],[id*="play" i],[aria-label*="play" i],button');
+                for (var j = 0; j < cands.length; j++) {
+                    var r = cands[j].getBoundingClientRect();
+                    var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+                    if (r.width >= 36 && r.height >= 36 && r.width < w * 0.6 &&
+                        Math.abs(cx - w / 2) < w * 0.2 && Math.abs(cy - h / 2) < h * 0.25) {
+                        try { cands[j].click(); } catch (e) { }
+                        break;
+                    }
+                }
+            }
+        }, 800);
     }
 
     ['loadstart', 'playing', 'pause', 'ended', 'timeupdate'].forEach(function (name) {
@@ -180,6 +222,11 @@
                     break;
                 case 'pause':
                     pauseAll();
+                    break;
+                case 'mute':
+                    window.__dpmSniff = true;
+                    var vs = document.getElementsByTagName('video');
+                    for (var k = 0; k < vs.length; k++) { vs[k].muted = true; try { vs[k].pause(); } catch (e) { } }
                     break;
                 case 'play':
                     if (active) { try { active.play(); } catch (e) { } }
