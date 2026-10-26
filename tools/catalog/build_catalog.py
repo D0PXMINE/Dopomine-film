@@ -245,7 +245,13 @@ def fetch_ratings(work, kps, max_age_days, workers=16):
     path = os.path.join(work, "ratings.json")
     cache = load_json(path, {})
     now = time.time()
-    todo = [k for k in kps if k not in cache or now - cache[k][4] > max_age_days * 86400]
+
+    def stale(k):
+        r = cache.get(k)
+        # an empty answer is usually a hiccup (rate limit, cut-off response): ask again next time
+        return r is None or now - r[4] > max_age_days * 86400 or (r[1] == 0 and r[3] == 0)
+
+    todo = [k for k in kps if stale(k)]
     log(f"ratings: {len(kps) - len(todo)} fresh, {len(todo)} to fetch")
 
     def run(k):
@@ -319,6 +325,22 @@ def num(v):
         return None
 
 
+# Wikidata labels often copy the Wikipedia article name: "Рай (фильм, 2002)", "Мистер Бин (мультсериал)"
+DISAMBIGUATION = re.compile(
+    r"\s+\((?:(?:короткометражный |полнометражный |документальный |художественный )?"
+    r"(?:фильм|телефильм|кинофильм|мультфильм|телесериал|сериал|мини-сериал|мультсериал|аниме|мюзикл|"
+    r"film|tv series|miniseries|animated series)(?:[,\s][^()]*)?|(?:19|20)\d\d)\)$",
+    re.IGNORECASE,
+)
+
+
+def clean_title(s):
+    if not s:
+        return s
+    cleaned = DISAMBIGUATION.sub("", s.strip())
+    return cleaned or s.strip()
+
+
 def normalize(s):
     s = (s or "").lower().replace("ё", "е")
     return re.sub(r"[^0-9a-zа-я]+", " ", s).strip()
@@ -378,12 +400,12 @@ def assemble(out_path, candidates, details, labels, ratings, min_votes):
         if excluded:
             skipped["excluded"] += 1
             continue
-        title = d.get("ru") or d.get("ot") or d.get("en")
+        title = clean_title(d.get("ru") or d.get("ot") or d.get("en"))
         if not title:
             skipped["no_title"] += 1
             continue
         # P1476 may hold a working title (Friends -> "Insomnia Cafe"); the English label is safer
-        original = d.get("en") or d.get("ot")
+        original = clean_title(d.get("en") or d.get("ot"))
         if original and original.strip().lower() == title.strip().lower():
             original = None
         year = year_of(d.get("date")) or year_of(d.get("start"))
@@ -449,7 +471,7 @@ def main():
     ap.add_argument("--work", default=".catalog-work")
     ap.add_argument("--out", default="app/src/main/assets/catalog/catalog.db")
     ap.add_argument("--min-sitelinks", type=int, default=3)
-    ap.add_argument("--min-votes", type=int, default=300)
+    ap.add_argument("--min-votes", type=int, default=50)
     ap.add_argument("--rating-age-days", type=int, default=21)
     ap.add_argument("--skip-ratings", action="store_true")
     args = ap.parse_args()

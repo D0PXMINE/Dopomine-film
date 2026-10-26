@@ -57,7 +57,8 @@ class HelpersTest {
         val (where, args) = CatalogQuery(Kind.FILMS, Sort.RATING, genre = "Комедия", yearFrom = 2000).where()
         assertTrue(where.startsWith("type = 0"))
         assertTrue("rating sort needs votes", where.contains("kp_votes >= ?"))
-        assertEquals(listOf<Any?>(Genres.bit("Комедия"), 2000, 20_000), args)
+        assertEquals(listOf<Any?>(Genres.bit("Комедия"), 2000, 20_000, Genres.bit("Документальный")), args)
+        assertTrue("no shorts in the top", where.contains("duration >= 40"))
     }
 
     @Test
