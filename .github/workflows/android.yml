@@ -26,8 +26,11 @@ jobs:
       - name: Build release APK
         run: ./gradlew --no-daemon :app:assembleRelease
 
+      # the APK also lives in release/; a full artifact quota should not turn the build red
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: Dopomine-apk
           path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
+          retention-days: 7
