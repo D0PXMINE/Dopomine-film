@@ -147,6 +147,14 @@ class ScreenshotTest {
     }
 
     @Test
+    fun homeAnime() {
+        app()
+        compose.onNodeWithText("Аниме").performClick()
+        settle()
+        compose.onRoot().captureRoboImage("$out/13_home_anime.png")
+    }
+
+    @Test
     fun details() {
         app { it.navigate("details/301") }
         compose.onRoot().captureRoboImage("$out/03_details.png")
@@ -289,5 +297,31 @@ class ScreenshotTest {
         compose.mainClock.autoAdvance = false
         compose.mainClock.advanceTimeBy(300)
         compose.onRoot().captureRoboImage("$out/12_player_resolving.png")
+    }
+
+    @OptIn(ExperimentalRoborazziApi::class)
+    @Test
+    @Config(qualifiers = "w880dp-h400dp-xxhdpi")
+    fun playerAnimeSources() {
+        val session = playerSession().apply {
+            title = "Провожающая в последний путь Фрирен"
+            subtitle = "AniLiberty · 1 сезон · 5 серия"
+            choices = listOf(
+                SourceChoice(SourceChoice.ANILIBERTY, "AniLiberty", "Аниме · озвучка AniLibria, до 1080p, все сезоны", null),
+                SourceChoice(SourceChoice.ANIMEVOST, "AnimeVost", "Аниме · озвучка AnimeVost, 720p", null),
+                SourceChoice(SourceChoice.VEOVEO, "VeoVeo", "Прямой поток · озвучки, субтитры, качество и серии в приложении", null),
+                SourceChoice(SourceChoice.COLLAPS, "Collaps", "Прямой поток · озвучки, качество и серии в приложении", null),
+                SourceChoice(SourceChoice.SITE_PLAYER, "Плеер сайта", "Страница сайта без рекламы, без нативных функций", null),
+            )
+            currentChoice = SourceChoice.ANILIBERTY
+            sheet = Sheet.SOURCES
+        }
+        val state = nativeState().apply {
+            audio = emptyList()
+            qualities = listOf(TrackOption("v:0", "1080p", null, true), TrackOption("v:1", "720p", null, false), TrackOption("v:2", "480p", null, false))
+        }
+        compose.setContent { DopomineTheme(ThemeMode.DARK) { PlayerScreen(session, state, NoControls, gesturesEnabled = true) } }
+        settle()
+        captureScreenRoboImage("$out/14_player_anime_sources.png")
     }
 }

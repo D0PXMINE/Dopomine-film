@@ -516,7 +516,7 @@ private fun PlayerSheet(sheet: Sheet, session: PlayerSession, state: NativeState
         Column(Modifier.navigationBarsPadding().padding(bottom = 12.dp)) {
             when (sheet) {
                 Sheet.SOURCES -> {
-                    SheetTitle("Источник", "Откуда брать видео. Collaps играет прямо в приложении; остальные — поток, пойманный со страницы плеера.")
+                    SheetTitle("Источник", "Откуда брать видео. AniLiberty, AnimeVost, VeoVeo и Collaps играют прямо в приложении; остальные — поток, пойманный со страницы плеера.")
                     LazyColumn(Modifier.heightIn(max = 520.dp)) {
                         items(session.choices) { c ->
                             OptionRow(c.title, c.subtitle, c.key == session.currentChoice) { controls.chooseSource(c.key) }

@@ -8,6 +8,7 @@ enum class Kind(val label: String, val sql: String) {
     SERIES("Сериалы", "type IN (1, 2)"),
     MINI("Мини-сериалы", "type = 2"),
     SHOWS("ТВ-шоу", "type = 3"),
+    ANIME("Аниме", "(genres & ${Genres.bit("Аниме")}) != 0"),
     ALL("Всё", "1 = 1"),
 }
 
@@ -132,5 +133,23 @@ object Sections {
             Section("s_show", "ТВ-шоу", CatalogQuery(Kind.SHOWS, Sort.TREND)),
         )
 
-    fun byKey(key: String): Section? = (films + series).firstOrNull { it.key == key }
+    /** Anime has its own tab: films and shows together, with genre shelves of its own. */
+    val anime: List<Section>
+        get() = listOf(
+            Section("a_trend", "Популярное аниме", CatalogQuery(Kind.ANIME, Sort.TREND, minVotes = 300)),
+            Section("a_series", "Аниме-сериалы", CatalogQuery(Kind.SERIES, Sort.TREND, genre = "Аниме", minVotes = 300)),
+            Section("a_films", "Полнометражное аниме", CatalogQuery(Kind.FILMS, Sort.TREND, genre = "Аниме", minVotes = 300)),
+            Section("a_new", "Новинки аниме", CatalogQuery(Kind.ANIME, Sort.POPULAR, yearFrom = y - 1)),
+            Section("a_top", "Лучшее аниме", CatalogQuery(Kind.ANIME, Sort.RATING, minVotes = 10_000)),
+            Section("a_action", "Экшен", CatalogQuery(Kind.ANIME, Sort.TREND, genre = "Боевик")),
+            Section("a_fantasy", "Фэнтези и исекай", CatalogQuery(Kind.ANIME, Sort.TREND, genre = "Фэнтези")),
+            Section("a_scifi", "Фантастика и меха", CatalogQuery(Kind.ANIME, Sort.TREND, genre = "Фантастика")),
+            Section("a_comedy", "Комедии", CatalogQuery(Kind.ANIME, Sort.TREND, genre = "Комедия")),
+            Section("a_romance", "Романтика", CatalogQuery(Kind.ANIME, Sort.TREND, genre = "Мелодрама")),
+            Section("a_drama", "Драмы", CatalogQuery(Kind.ANIME, Sort.TREND, genre = "Драма")),
+            Section("a_mystery", "Детективы и мистика", CatalogQuery(Kind.ANIME, Sort.TREND, genre = "Детектив")),
+            Section("a_classic", "Классика аниме", CatalogQuery(Kind.ANIME, Sort.POPULAR, yearTo = 2005)),
+        )
+
+    fun byKey(key: String): Section? = (films + series + anime).firstOrNull { it.key == key }
 }

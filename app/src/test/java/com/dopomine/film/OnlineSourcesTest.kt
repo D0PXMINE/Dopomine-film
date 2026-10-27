@@ -5,6 +5,10 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.hls.playlist.HlsMultivariantPlaylist
 import androidx.media3.exoplayer.hls.playlist.HlsPlaylistParser
 import com.dopomine.film.data.net.BROWSER_UA
+import com.dopomine.film.data.model.ContentType
+import com.dopomine.film.data.model.Movie
+import com.dopomine.film.player.resolve.AniLibertyResolver
+import com.dopomine.film.player.resolve.AnimevostResolver
 import com.dopomine.film.player.resolve.Playable
 import com.dopomine.film.player.resolve.PlayerSite
 import com.dopomine.film.player.resolve.VeoVeoResolver
@@ -20,7 +24,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * Talks to the real player site and VeoVeo. Skipped unless -Ddpm.online=true
+ * Talks to the real player site, VeoVeo and the anime sources. Skipped unless -Ddpm.online=true
  * (network-dependent, so it is not part of the regular build).
  */
 @UnstableApi
@@ -65,5 +69,57 @@ class OnlineSourcesTest {
         println("seasons: " + playable.seasons.joinToString { "${it.number}:${it.episodes.size}" })
         assertTrue(playable.seasons.size >= 8)
         assertTrue(playable.seasons.first().episodes.first().stream.url.contains(".m3u8"))
+    }
+
+    // ---- anime ----------------------------------------------------------------------------------
+
+    private val frieren = Movie(5401195, "Фрирен", "Frieren", 2023, type = ContentType.SERIES, genres = listOf(Movie.ANIME))
+    private val titan = Movie(749374, "Атака титанов", "Attack on Titan", 2013, type = ContentType.SERIES, malId = 16498)
+    private val reze = Movie(5430477, "Человек-бензопила. Фильм: История Резе", "Chainsaw Man – The Movie: Reze Arc", 2025, malId = 57555)
+
+    private fun status(url: String): Int =
+        http.newCall(Request.Builder().url(url).header("User-Agent", BROWSER_UA).header("Range", "bytes=0-1023").build()).execute().use { it.code }
+
+    @Test
+    fun aniLibertyFindsSeriesByNameAndByMal() = runBlocking {
+        assumeTrue(System.getProperty("dpm.online") == "true")
+        val resolver = AniLibertyResolver(http)
+        for (movie in listOf(frieren, frieren.copy(malId = 52991))) {
+            val playable = resolver.resolve(movie) { println(it) } as Playable.Series
+            println("seasons: " + playable.seasons.joinToString { "${it.number}:${it.episodes.size}" } + " start ${playable.startSeason}")
+            val first = playable.seasons.first { it.number == (playable.startSeason ?: 1) }
+            assertTrue(first.episodes.size >= 28)
+            val stream = first.episodes.first().stream
+            println("variants: " + stream.variants.joinToString { it.label })
+            assertEquals(listOf("1080p", "720p", "480p"), stream.variants.map { it.label })
+            assertTrue("no ad switches left in the link", '?' !in stream.url)
+            val response = http.newCall(Request.Builder().url(stream.url).header("User-Agent", BROWSER_UA).build()).execute()
+            val text = response.body!!.string()
+            assertEquals(200, response.code)
+            assertTrue(text.startsWith("#EXTM3U"))
+            assertTrue("no inserted ad breaks", "DISCONTINUITY" !in text)
+        }
+    }
+
+    @Test
+    fun animevostAssemblesSeasonsAndFindsFilms() = runBlocking {
+        assumeTrue(System.getProperty("dpm.online") == "true")
+        val resolver = AnimevostResolver(http)
+        val show = resolver.resolve(titan) { println(it) } as Playable.Series
+        println("seasons: " + show.seasons.joinToString { "${it.number}:${it.episodes.size}" })
+        assertTrue(show.seasons.size >= 4)
+        assertEquals(25, show.seasons.first().episodes.size)
+        val file = show.seasons.first().episodes.first().stream
+        println("file: ${file.url} variants ${file.variants.map { it.label }}")
+        assertTrue(file.url.startsWith("https://"))
+        assertTrue(status(file.url) in listOf(200, 206))
+
+        val film = resolver.resolve(reze) { println(it) }
+        println("film: $film".take(200))
+        assertTrue(film is Playable.Single)
+
+        val frierenShow = resolver.resolve(frieren) { println(it) } as Playable.Series
+        println("frieren: " + frierenShow.seasons.joinToString { "${it.number}:${it.episodes.size}" })
+        assertEquals(28, frierenShow.seasons.first().episodes.size)
     }
 }

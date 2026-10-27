@@ -24,7 +24,7 @@ import kotlinx.coroutines.launch
 data class ShelfState(val items: List<Movie>? = null, val error: AppException? = null)
 
 class HomeViewModel(private val catalog: CatalogRepository, library: LibraryRepository) : ViewModel() {
-    /** 0 = films, 1 = series. */
+    /** 0 = films, 1 = series, 2 = anime. */
     private val _mode = MutableStateFlow(0)
     val mode: StateFlow<Int> = _mode.asStateFlow()
 
@@ -34,7 +34,11 @@ class HomeViewModel(private val catalog: CatalogRepository, library: LibraryRepo
     private val shelves = mutableStateMapOf<String, ShelfState>()
     private val inFlight = HashSet<String>()
 
-    fun sections(mode: Int): List<Section> = if (mode == 0) Sections.films else Sections.series
+    fun sections(mode: Int): List<Section> = when (mode) {
+        1 -> Sections.series
+        2 -> Sections.anime
+        else -> Sections.films
+    }
 
     fun setMode(value: Int) {
         _mode.value = value

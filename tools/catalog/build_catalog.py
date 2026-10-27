@@ -61,6 +61,8 @@ GENRES = [
     ("Супергерои", ["супергеро", "superhero"]),
 ]
 
+ANIME_BIT = 1 << [g for g, _ in GENRES].index("Аниме")
+
 TYPE_FILM, TYPE_SERIES, TYPE_MINI, TYPE_SHOW = 0, 1, 2, 3
 
 
@@ -169,6 +171,24 @@ WHERE {
 def val(b, k):
     v = b.get(k)
     return v["value"] if v else None
+
+
+def fetch_mal_ids(work):
+    """MyAnimeList IDs (P4086): they mark real anime and let the app match anime players exactly."""
+    path = os.path.join(work, "mal.json")
+    try:
+        text = sparql("SELECT ?f ?mal WHERE { ?f wdt:P2603 [] ; wdt:P4086 ?mal }", fmt="csv")
+    except Exception as e:  # noqa: BLE001 - keep the last good list
+        log(f"mal ids: {e}, using the cached list")
+        return load_json(path, {})
+    out = {}
+    for r in csv.DictReader(io.StringIO(text)):
+        q = r["f"].rsplit("/", 1)[-1]
+        if r["mal"].isdigit():
+            out.setdefault(q, int(r["mal"]))
+    log(f"mal ids: {len(out)}")
+    save_json(path, out)
+    return out
 
 
 def fetch_details(work, candidates, batch=250, workers=4):
@@ -369,15 +389,30 @@ CREATE TABLE titles (
   wiki TEXT,
   popularity REAL NOT NULL,
   trend REAL NOT NULL,
-  search TEXT NOT NULL
+  search TEXT NOT NULL,
+  mal INTEGER
 );
 CREATE INDEX titles_type_popularity ON titles(type, popularity DESC);
 CREATE INDEX titles_type_trend ON titles(type, trend DESC);
 CREATE INDEX titles_imdb ON titles(imdb);
 """
+SCHEMA_VERSION = "2"   # the app refuses catalogs older than the schema it reads
+
+JAPAN = "Q17"
 
 
-def assemble(out_path, candidates, details, labels, ratings, min_votes):
+def is_anime(mal, animated, country_ids, labels_text):
+    """Wikidata's genres and countries are noisy (Ratatouille lists Japan, Miraculous is tagged
+    anime), so anime needs a MyAnimeList ID, Japan as the only country of an animated work, or
+    an anime genre together with Japan."""
+    if mal:
+        return True
+    if animated and country_ids and set(country_ids) == {JAPAN}:
+        return True
+    return ("аниме" in labels_text or "anime" in labels_text) and JAPAN in country_ids
+
+
+def assemble(out_path, candidates, details, labels, ratings, min_votes, mal_ids):
     rows = []
     skipped = {"no_details": 0, "excluded": 0, "no_title": 0, "few_votes": 0, "future": 0}
     seen = set()
@@ -400,9 +435,13 @@ def assemble(out_path, candidates, details, labels, ratings, min_votes):
         if excluded:
             skipped["excluded"] += 1
             continue
-        title = clean_title(d.get("ru") or d.get("ot") or d.get("en"))
+        # without a Russian label the English one reads better than a native-script original (呪術廻戦)
+        title = clean_title(d.get("ru") or d.get("en") or d.get("ot"))
         if not title:
             skipped["no_title"] += 1
+            continue
+        if title.startswith("Список "):          # "Список серий …": a Wikipedia list, not a title
+            skipped["excluded"] += 1
             continue
         # P1476 may hold a working title (Friends -> "Insomnia Cafe"); the English label is safer
         original = clean_title(d.get("en") or d.get("ot"))
@@ -415,14 +454,21 @@ def assemble(out_path, candidates, details, labels, ratings, min_votes):
         if year and year > YEAR + 1:
             skipped["future"] += 1
             continue
-        if kp_votes < min_votes and imdb_votes < min_votes * 5 and cand["sl"] < 8:
-            skipped["few_votes"] += 1
-            continue
         genre_labels = []
         for g in (d.get("genres") or "").split(","):
             l = labels.get(g) or {}
             genre_labels += [x for x in (l.get("ru"), l.get("en")) if x]
+        country_ids = [c for c in (d.get("countries") or "").split(",") if c]
+        mal = mal_ids.get(q)
+        anime = is_anime(mal, animated, country_ids, " | ".join(genre_labels + type_labels).lower())
+        animated = animated or anime
+        # anime has a smaller audience on Kinopoisk: keep it with fewer votes
+        need = min_votes // 5 if anime else min_votes
+        if kp_votes < need and imdb_votes < need * 5 and cand["sl"] < 8:
+            skipped["few_votes"] += 1
+            continue
         genres = genre_bits(genre_labels + (["анимация"] if animated else []))
+        genres = (genres | ANIME_BIT) if anime else (genres & ~ANIME_BIT)
         countries = []
         for c in (d.get("countries") or "").split(","):
             l = labels.get(c) or {}
@@ -444,18 +490,20 @@ def assemble(out_path, candidates, details, labels, ratings, min_votes):
             imdb_votes, dur, d.get("imdb"), num(d.get("seasons")),
             num(d.get("eps")), d.get("wiki"), round(popularity, 4), round(trend, 4),
             " ".join(x for x in {normalize(title), normalize(original), normalize(d.get("en"))} if x),
+            mal,
         ))
-    log(f"assemble: {len(rows)} titles, skipped {skipped}")
+    log(f"assemble: {len(rows)} titles ({sum(1 for r in rows if r[7] & ANIME_BIT)} anime), skipped {skipped}")
 
     tmp = out_path + ".tmp"
     if os.path.exists(tmp):
         os.remove(tmp)
     db = sqlite3.connect(tmp)
     db.executescript(SCHEMA)
-    db.executemany("INSERT INTO titles VALUES (" + ",".join("?" * 21) + ")", rows)
+    db.executemany("INSERT INTO titles VALUES (" + ",".join("?" * 22) + ")", rows)
     db.executemany("INSERT INTO meta VALUES (?, ?)", [
         ("version", dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d%H%M")),
         ("count", str(len(rows))),
+        ("schema", SCHEMA_VERSION),
         ("genres", json.dumps([g for g, _ in GENRES], ensure_ascii=False)),
     ])
     db.commit()
@@ -503,7 +551,7 @@ def main():
         ratings = load_json(os.path.join(args.work, "ratings.json"), {})
     else:
         ratings = fetch_ratings(args.work, kps, args.rating_age_days)
-    assemble(args.out, candidates, details, labels, ratings, args.min_votes)
+    assemble(args.out, candidates, details, labels, ratings, args.min_votes, fetch_mal_ids(args.work))
 
 
 if __name__ == "__main__":

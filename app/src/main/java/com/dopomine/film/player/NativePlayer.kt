@@ -71,6 +71,8 @@ class NativePlayer(context: Context, private val http: OkHttpClient) {
 
     private var stream: Stream? = null
     var preferredVoice: String? = null
+    /** Quality picked among a source's separate files; kept for the next episode. */
+    var preferredQuality: String? = null
     var onEnded: (() -> Unit)? = null
     var onError: ((PlaybackException) -> Unit)? = null
     var onPlayingChanged: ((Boolean) -> Unit)? = null
@@ -106,8 +108,9 @@ class NativePlayer(context: Context, private val http: OkHttpClient) {
         exo.addListener(listener)
     }
 
-    fun play(next: Stream, startMs: Long = 0L, autoPlay: Boolean = true) {
-        stream = next
+    fun play(stream: Stream, startMs: Long = 0L, autoPlay: Boolean = true) {
+        val next = stream.variants.firstOrNull { it.label == preferredQuality }?.let(stream::withVariant) ?: stream
+        this.stream = next
         state.error = null
         state.ended = false
         state.audio = emptyList()
@@ -172,6 +175,13 @@ class NativePlayer(context: Context, private val http: OkHttpClient) {
     }
 
     fun selectQuality(key: String) {
+        val current = stream
+        if (current != null && key.startsWith(VARIANT)) {
+            val variant = current.variants.getOrNull(key.removePrefix(VARIANT).toIntOrNull() ?: -1) ?: return
+            preferredQuality = variant.label
+            if (variant.url != current.url) play(current.withVariant(variant), exo.currentPosition, exo.playWhenReady)
+            return
+        }
         if (key == AUTO) {
             exo.trackSelectionParameters = exo.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_VIDEO).build()
         } else {
@@ -256,7 +266,11 @@ class NativePlayer(context: Context, private val http: OkHttpClient) {
             }
         }
         val autoQuality = exo.trackSelectionParameters.overrides.keys.none { it.type == C.TRACK_TYPE_VIDEO }
-        state.qualities = if (video.isEmpty()) emptyList() else
+        val variants = stream?.variants.orEmpty()
+        state.qualities = if (variants.isNotEmpty()) {
+            // one file per quality: switching reloads the chosen file at the same position
+            variants.mapIndexed { i, v -> TrackOption("$VARIANT$i", v.label, null, v.url == stream?.url) }
+        } else if (video.isEmpty()) emptyList() else
             listOf(TrackOption(AUTO, "Авто", null, autoQuality)) +
                 video.distinctBy { it.first }.sortedByDescending { it.first }.map { (_, o) -> if (autoQuality) o.copy(selected = false) else o }
         // several renditions can share a name ("Оригинал. Комментарии" ×4): number the repeats
@@ -296,5 +310,6 @@ class NativePlayer(context: Context, private val http: OkHttpClient) {
     companion object {
         const val AUTO = "auto"
         const val OFF = "off"
+        private const val VARIANT = "v:"
     }
 }

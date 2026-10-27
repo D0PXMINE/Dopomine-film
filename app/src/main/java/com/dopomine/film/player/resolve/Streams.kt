@@ -4,6 +4,10 @@ import androidx.compose.runtime.Immutable
 
 enum class StreamFormat { HLS, DASH, PROGRESSIVE }
 
+/** One quality of a source that publishes a separate file per quality (AniLiberty, AnimeVost). */
+@Immutable
+data class Variant(val label: String, val url: String)
+
 @Immutable
 data class Subtitle(val url: String, val label: String, val language: String? = null)
 
@@ -16,7 +20,11 @@ data class Stream(
     /** Voice-over names for the audio renditions, in playlist order (Collaps puts them in the page). */
     val audioNames: List<String> = emptyList(),
     val subtitles: List<Subtitle> = emptyList(),
+    /** Separate files per quality, best first; [url] is one of them. Empty for adaptive playlists. */
+    val variants: List<Variant> = emptyList(),
 ) {
+    fun withVariant(v: Variant) = copy(url = v.url, format = formatOf(v.url))
+
     companion object {
         fun formatOf(url: String): StreamFormat {
             val path = url.substringBefore('?').lowercase()
@@ -41,7 +49,8 @@ sealed interface Playable {
     val sourceName: String
 
     data class Single(override val sourceName: String, val stream: Stream) : Playable
-    data class Series(override val sourceName: String, val seasons: List<Season>) : Playable
+    /** [startSeason]: the season the matched release belongs to, when the source lists a whole franchise. */
+    data class Series(override val sourceName: String, val seasons: List<Season>, val startSeason: Int? = null) : Playable
 }
 
 /** A player (balancer) offered by the player site for a title. */

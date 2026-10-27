@@ -25,6 +25,8 @@ data class SourceChoice(
     companion object {
         const val COLLAPS = "collaps"
         const val VEOVEO = "veoveo"
+        const val ANILIBERTY = "aniliberty"
+        const val ANIMEVOST = "animevost"
         const val SITE = "site"
         const val SITE_PLAYER = "site_player"
     }
