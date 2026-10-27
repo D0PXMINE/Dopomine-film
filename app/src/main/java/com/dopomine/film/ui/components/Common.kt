@@ -1,6 +1,5 @@
 package com.dopomine.film.ui.components
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -29,21 +28,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.dopomine.film.data.AppException
+import com.dopomine.film.R
 import com.dopomine.film.ui.theme.Radius
 import com.dopomine.film.ui.theme.T
 import com.dopomine.film.ui.theme.Type
-import kotlin.math.PI
-import kotlin.math.cos
-import kotlin.math.sin
 
 /** Mono uppercase label — splicer's `.caps`. */
 @Composable
@@ -106,8 +102,9 @@ fun Chip(text: String, on: Boolean = false, modifier: Modifier = Modifier, onCli
 }
 
 /** Segmented control — splicer's `.segmented` ("Любой / Ваншоты / Лупы"). */
+/** @param fill share the given width equally between the options (for tight spots like the home banner). */
 @Composable
-fun Segmented(options: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
+fun Segmented(options: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier, fill: Boolean = false) {
     val shape = RoundedCornerShape(999.dp)
     Row(
         modifier
@@ -121,13 +118,14 @@ fun Segmented(options: List<String>, selected: Int, onSelect: (Int) -> Unit, mod
             val active = i == selected
             Box(
                 Modifier
+                    .then(if (fill) Modifier.weight(1f) else Modifier)
                     .clip(shape)
                     .then(if (active) Modifier.background(T.surface).border(1.dp, T.border, shape) else Modifier)
                     .clickable { onSelect(i) }
-                    .padding(horizontal = 14.dp, vertical = 7.dp),
+                    .padding(horizontal = if (fill) 4.dp else 14.dp, vertical = 7.dp),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(label, style = Type.button, color = if (active) T.text else T.text2)
+                Text(label, style = Type.button, color = if (active) T.text else T.text2, maxLines = 1, softWrap = false)
             }
         }
     }
@@ -243,23 +241,8 @@ fun EmptyHint(title: String, modifier: Modifier = Modifier, subtitle: String? = 
 /** The brand mark: rays from the center, same geometry as the launcher icon. */
 @Composable
 fun LogoMark(size: Dp, modifier: Modifier = Modifier, color: Color = T.text) {
-    Canvas(modifier.size(size)) {
-        val c = Offset(this.size.width / 2, this.size.height / 2)
-        val outer = this.size.minDimension / 2
-        val inner = outer * 0.1f
-        val rays = 24
-        val step = 2 * PI / rays
-        val half = step * 0.55 / 2
-        val path = Path()
-        for (k in 0 until rays) {
-            val a = -PI / 2 + k * step
-            path.moveTo(c.x + (inner * cos(a)).toFloat(), c.y + (inner * sin(a)).toFloat())
-            path.lineTo(c.x + (outer * cos(a - half)).toFloat(), c.y + (outer * sin(a - half)).toFloat())
-            path.lineTo(c.x + (outer * cos(a + half)).toFloat(), c.y + (outer * sin(a + half)).toFloat())
-            path.close()
-        }
-        drawPath(path, color)
-    }
+    // the eight-ray sparkle from tools/gen_icons.py, same shape as the launcher icon
+    Icon(painterResource(R.drawable.ic_logo), contentDescription = null, modifier = modifier.size(size), tint = color)
 }
 
 @Composable

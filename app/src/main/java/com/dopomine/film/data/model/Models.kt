@@ -33,12 +33,18 @@ data class Movie(
     val seasons: Int? = null,
     val episodes: Int? = null,
     val wiki: String? = null,
+    /** MyAnimeList ID (anime only): lets the anime players find the exact release. */
+    val malId: Int? = null,
 ) {
+    val isAnime: Boolean get() = malId != null || ANIME in genres
+
     /** Kinopoisk's own poster CDN works by film ID, no key needed. */
     val posterUrl: String get() = posterUrl(id)
     val posterLargeUrl: String get() = "https://st.kp.yandex.net/images/film_big/$id.jpg"
 
     companion object {
+        const val ANIME = "Аниме"
+
         fun posterUrl(id: Int) = "https://st.kp.yandex.net/images/film_iphone/iphone360_$id.jpg"
     }
 }

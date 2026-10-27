@@ -46,6 +46,8 @@ import com.dopomine.film.appContainer
 import com.dopomine.film.data.model.ContentType
 import com.dopomine.film.data.model.Movie
 import com.dopomine.film.data.settings.AppSettings
+import com.dopomine.film.player.resolve.AniLibertyResolver
+import com.dopomine.film.player.resolve.AnimevostResolver
 import com.dopomine.film.player.resolve.Playable
 import com.dopomine.film.player.resolve.SourceInfo
 import com.dopomine.film.player.resolve.Stream
@@ -79,6 +81,8 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
         private const val EXTRA_YEAR = "year"
         private const val EXTRA_TYPE = "type"
         private const val EXTRA_IMDB = "imdb"
+        private const val EXTRA_MAL = "mal"
+        private const val EXTRA_ANIME = "anime"
         private const val EXTRA_KP = "kp"
         private const val EXTRA_IMDB_RATING = "imdb_rating"
         private const val ACTION_PIP_TOGGLE = "com.dopomine.film.PIP_TOGGLE"
@@ -93,6 +97,8 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
                 .putExtra(EXTRA_YEAR, movie.year ?: 0)
                 .putExtra(EXTRA_TYPE, movie.type.name)
                 .putExtra(EXTRA_IMDB, movie.imdbId)
+                .putExtra(EXTRA_MAL, movie.malId ?: 0)
+                .putExtra(EXTRA_ANIME, movie.isAnime)
                 .putExtra(EXTRA_KP, movie.ratingKp ?: 0.0)
                 .putExtra(EXTRA_IMDB_RATING, movie.ratingImdb ?: 0.0)
 
@@ -105,6 +111,8 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
                 year = getIntExtra(EXTRA_YEAR, 0).takeIf { it > 0 },
                 type = runCatching { ContentType.valueOf(getStringExtra(EXTRA_TYPE) ?: "") }.getOrDefault(ContentType.FILM),
                 imdbId = getStringExtra(EXTRA_IMDB),
+                malId = getIntExtra(EXTRA_MAL, 0).takeIf { it > 0 },
+                genres = if (getBooleanExtra(EXTRA_ANIME, false)) listOf(Movie.ANIME) else emptyList(),
                 ratingKp = getDoubleExtra(EXTRA_KP, 0.0).takeIf { it > 0 },
                 ratingImdb = getDoubleExtra(EXTRA_IMDB_RATING, 0.0).takeIf { it > 0 },
             )
@@ -127,6 +135,7 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
     private val audio by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
 
     private var resolveJob: Job? = null
+    private var sources: List<SourceInfo> = emptyList()
     private var sniffWaiter: CompletableDeferred<Stream>? = null
     private var sniffedName: String? = null
     private var itemKey: String? = null
@@ -270,21 +279,26 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
         session.error = null
         session.status = "Ищем, откуда сайт берёт видео…"
         session.log.clear()
-        log("Фильм: ${movie.title} (Кинопоиск ${movie.id})")
+        // favourites and history keep only a few fields: take the IDs the players match by from the catalog
+        if (movie.malId == null || movie.imdbId == null) {
+            runCatching { container.catalogDb.byId(movie.id) }.getOrNull()?.let { full ->
+                movie = movie.copy(
+                    imdbId = movie.imdbId ?: full.imdbId,
+                    malId = movie.malId ?: full.malId,
+                    genres = (movie.genres + full.genres).distinct(),
+                )
+            }
+        }
+        log("Фильм: ${movie.title} (Кинопоиск ${movie.id}${if (movie.isAnime) ", аниме" else ""})")
 
         val sources = runCatching { container.playerSite.sources(mirror, movie.id, movie.imdbId) }
             .onFailure { if (it is CancellationException) throw it; log("Список плееров не получен: ${it.message}") }
             .getOrDefault(emptyList())
         if (sources.isNotEmpty()) log("Плееры на сайте: ${sources.joinToString { it.name }}")
+        this.sources = sources
         session.choices = buildChoices(sources)
 
-        sources.firstOrNull { it.isVeoVeo }?.let { veo ->
-            session.status = "VeoVeo: получаем поток…"
-            if (tryVeoVeo(veo)) return
-        }
-
-        session.status = "Collaps: получаем поток…"
-        if (tryCollaps(sources.firstOrNull { it.isCollaps })) return
+        for (key in directOrder) if (tryDirect(key)) return
 
         if (sniff("Ловим поток со страницы плеера…", SourceChoice.SITE, "Сайт") { it.loadSite(mirror, movie.id) }) return
 
@@ -295,7 +309,49 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
         showSitePlayer()
     }
 
+    /** Sources played natively, in the order they are tried; anime has its own dub teams first. */
+    private val directOrder: List<String>
+        get() = buildList {
+            if (movie.isAnime) {
+                add(SourceChoice.ANILIBERTY)
+                add(SourceChoice.ANIMEVOST)
+            }
+            add(SourceChoice.VEOVEO)
+            add(SourceChoice.COLLAPS)
+        }
+
+    private suspend fun tryDirect(key: String): Boolean = when (key) {
+        SourceChoice.ANILIBERTY -> tryAnime(key, AniLibertyResolver.NAME) { container.aniliberty.resolve(movie, ::log) }
+        SourceChoice.ANIMEVOST -> tryAnime(key, AnimevostResolver.NAME) { container.animevost.resolve(movie, ::log) }
+        SourceChoice.VEOVEO -> sources.firstOrNull { it.isVeoVeo }?.let {
+            session.status = "VeoVeo: получаем поток…"
+            tryVeoVeo(it)
+        } ?: false
+        SourceChoice.COLLAPS -> {
+            session.status = "Collaps: получаем поток…"
+            tryCollaps(sources.firstOrNull { it.isCollaps })
+        }
+        else -> false
+    }
+
+    private suspend fun tryAnime(key: String, name: String, resolve: suspend () -> Playable): Boolean = try {
+        session.status = "$name: ищем аниме…"
+        val playable = resolve()
+        log("$name: поток найден")
+        startNative(playable, key)
+        true
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        log("$name: ${e.message}")
+        false
+    }
+
     private fun buildChoices(sources: List<SourceInfo>): List<SourceChoice> = buildList {
+        if (movie.isAnime) {
+            add(SourceChoice(SourceChoice.ANILIBERTY, "AniLiberty", "Аниме · озвучка AniLibria, до 1080p, все сезоны", null))
+            add(SourceChoice(SourceChoice.ANIMEVOST, "AnimeVost", "Аниме · озвучка AnimeVost, 720p", null))
+        }
         sources.firstOrNull { it.isVeoVeo }?.let {
             add(SourceChoice(SourceChoice.VEOVEO, "VeoVeo", "Прямой поток · озвучки, субтитры, качество и серии в приложении", it))
         }
@@ -385,7 +441,9 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
             is Playable.Single -> playItem(playable.stream, "movie", null, null, playable.sourceName)
             is Playable.Series -> {
                 val last = container.library.lastEpisode(movie.id)
-                val season = playable.seasons.firstOrNull { it.number == last?.first } ?: playable.seasons.first()
+                val season = playable.seasons.firstOrNull { it.number == last?.first }
+                    ?: playable.seasons.firstOrNull { it.number == playable.startSeason }
+                    ?: playable.seasons.first()
                 val episode = season.episodes.firstOrNull { it.number == last?.second } ?: season.episodes.first()
                 playEpisodeInternal(season.number, episode.number)
             }
@@ -519,18 +577,12 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
         val choice = session.currentChoice
         resolveJob?.cancel()
         resolveJob = lifecycleScope.launch {
-            when {
-                choice == SourceChoice.VEOVEO -> {
+            when (choice) {
+                // a direct source refused the video: go on down the chain, then catch the site's stream
+                in directOrder -> {
                     session.mode = Mode.RESOLVING
-                    session.status = "VeoVeo не отдал видео — пробуем Collaps…"
-                    if (tryCollaps(session.choices.firstOrNull { it.key == SourceChoice.COLLAPS }?.info)) return@launch
+                    for (key in directOrder.dropWhile { it != choice }.drop(1)) if (tryDirect(key)) return@launch
                     if (!sniff("Ищем другой поток…", SourceChoice.SITE, "Сайт") { it.loadSite(mirror, movie.id) }) showSitePlayer()
-                }
-                // Collaps link refused: try catching another player's stream before giving up
-                choice == SourceChoice.COLLAPS -> {
-                    if (!sniff("Collaps не отдал видео — ищем другой поток…", SourceChoice.SITE, "Сайт") { it.loadSite(mirror, movie.id) }) {
-                        showSitePlayer()
-                    }
                 }
                 else -> {
                     log("Поток не воспроизводится в приложении — открываем плеер сайта")
@@ -570,19 +622,10 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
         resolveJob?.cancel()
         resolveJob = lifecycleScope.launch {
             when {
-                key == SourceChoice.VEOVEO && choice.info != null -> {
+                key in directOrder -> {
                     session.mode = Mode.RESOLVING
-                    session.status = "VeoVeo: получаем поток…"
-                    if (!tryVeoVeo(choice.info)) {
-                        session.error = "VeoVeo не отдал поток для этого фильма. Выберите другой источник."
-                        session.mode = Mode.ERROR
-                    }
-                }
-                key == SourceChoice.COLLAPS -> {
-                    session.mode = Mode.RESOLVING
-                    session.status = "Collaps: получаем поток…"
-                    if (!tryCollaps(choice.info)) {
-                        session.error = "Collaps не отдал поток для этого фильма. Выберите другой источник."
+                    if (!tryDirect(key)) {
+                        session.error = "${choice.title} не отдал поток для этого фильма. Выберите другой источник."
                         session.mode = Mode.ERROR
                     }
                 }

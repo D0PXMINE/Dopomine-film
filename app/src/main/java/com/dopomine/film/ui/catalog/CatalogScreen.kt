@@ -58,7 +58,7 @@ import com.dopomine.film.ui.theme.Type
 
 private enum class Sheet { SORT, YEARS, RATING }
 
-private val kinds = listOf(Kind.FILMS, Kind.SERIES, Kind.MINI, Kind.SHOWS)
+private val kinds = listOf(Kind.FILMS, Kind.SERIES, Kind.ANIME, Kind.MINI, Kind.SHOWS)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

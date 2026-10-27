@@ -6,6 +6,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.Cache
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.FormBody
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -69,6 +70,16 @@ suspend fun OkHttpClient.text(url: String, headers: Map<String, String> = emptyM
         header("User-Agent", BROWSER_UA)
         headers.forEach { (k, v) -> header(k, v) }
     }.build()
+    return newCall(request).await().use { response ->
+        if (!response.isSuccessful) throw HttpStatusException(response.code, url)
+        withContext(Dispatchers.IO) { response.body?.string().orEmpty() }
+    }
+}
+
+/** POST of a urlencoded form, returning the body as text. */
+suspend fun OkHttpClient.postForm(url: String, fields: Map<String, String>): String {
+    val body = FormBody.Builder().apply { fields.forEach { (k, v) -> add(k, v) } }.build()
+    val request = Request.Builder().url(url).header("User-Agent", BROWSER_UA).post(body).build()
     return newCall(request).await().use { response ->
         if (!response.isSuccessful) throw HttpStatusException(response.code, url)
         withContext(Dispatchers.IO) { response.body?.string().orEmpty() }

@@ -71,8 +71,7 @@ fun HomeScreen(nav: Nav) {
     val context = LocalContext.current
     val sections = remember(mode) { vm.sections(mode) }
     val featured = sections.first()
-    val filmsList = rememberLazyListState()
-    val seriesList = rememberLazyListState()
+    val lists = listOf(rememberLazyListState(), rememberLazyListState(), rememberLazyListState())
 
     LaunchedEffect(featured.key) { vm.load(featured) }
 
@@ -87,7 +86,7 @@ fun HomeScreen(nav: Nav) {
         }
         ContentCard {
             LazyColumn(
-                state = if (mode == 0) filmsList else seriesList,
+                state = lists[mode.coerceIn(0, 2)],
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = BottomBarSpace + 8.dp),
             ) {
@@ -130,30 +129,36 @@ fun HomeScreen(nav: Nav) {
     }
 }
 
+private data class HeroText(val caps: String, val title: String, val text: String, val seed: Int)
+
+private val heroes = listOf(
+    HeroText("фильмы", "Популярное сейчас", "Каталог Кинопоиска с рейтингами КП и IMDb. Плеер без рекламы.", 7),
+    HeroText("сериалы", "Сериалы недели", "Каталог Кинопоиска с рейтингами КП и IMDb. Плеер без рекламы.", 19),
+    HeroText("аниме", "Аниме", "Озвучки AniLibria и AnimeVost, все сезоны, до 1080p. Без рекламы.", 31),
+)
+
 /** splicer's hero banner: caps line, big title, mono description, dots running off the right edge. */
 @Composable
 private fun Hero(mode: Int, count: Int?, onMode: (Int) -> Unit, modifier: Modifier = Modifier) {
+    val hero = heroes[mode.coerceIn(0, heroes.lastIndex)]
     val shape = RoundedCornerShape(16.dp)
     Box(modifier.fillMaxWidth().heightIn(min = 190.dp).clip(shape).background(T.surface).border(1.dp, T.border, shape)) {
         Box(Modifier.matchParentSize()) {
             Halftone(
                 HalftoneVariant.BANNER,
                 Modifier.align(Alignment.CenterEnd).fillMaxHeight().fillMaxWidth(0.46f),
-                seed = if (mode == 0) 7 else 19,
+                seed = hero.seed,
                 cell = 6.dp,
             )
         }
         Column(Modifier.padding(20.dp).fillMaxWidth(0.6f)) {
-            Caps(listOfNotNull(if (mode == 0) "фильмы" else "сериалы", count?.let { "в подборке $it" }).joinToString(" · "))
+            Caps(listOfNotNull(hero.caps, count?.let { "в подборке $it" }).joinToString(" · "))
             Spacer(Modifier.height(6.dp))
-            Text(if (mode == 0) "Популярное сейчас" else "Сериалы недели", style = Type.display, color = T.text)
+            Text(hero.title, style = Type.display, color = T.text)
             Spacer(Modifier.height(6.dp))
-            Text(
-                "Каталог Кинопоиска с рейтингами КП и IMDb. Плеер без рекламы.",
-                style = Type.mono, color = T.text3,
-            )
+            Text(hero.text, style = Type.mono, color = T.text3)
             Spacer(Modifier.height(14.dp))
-            Segmented(listOf("Фильмы", "Сериалы"), mode, onMode)
+            Segmented(listOf("Фильмы", "Сериалы", "Аниме"), mode, onMode, Modifier.fillMaxWidth(), fill = true)
         }
     }
 }

@@ -48,7 +48,8 @@ class CatalogUpdater(
             get(BuildConfig.CATALOG_UPDATE_URL) { response ->
                 GZIPInputStream(response.body!!.byteStream()).use { input -> tmp.outputStream().use { input.copyTo(it, 64 * 1024) } }
             }
-            val newVersion = db.versionOf(tmp) ?: run { tmp.delete(); return@withContext Result.Failed("Скачанный каталог повреждён") }
+            val newVersion = db.versionOf(tmp)?.takeIf { db.isCompatible(tmp) }
+                ?: run { tmp.delete(); return@withContext Result.Failed("Скачанный каталог повреждён или устарел") }
             if (current != null && newVersion <= current) {
                 tmp.delete()
                 return@withContext Result.UpToDate

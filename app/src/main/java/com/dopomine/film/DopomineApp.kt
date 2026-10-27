@@ -23,6 +23,8 @@ import com.dopomine.film.data.settings.SettingsRepository
 import com.dopomine.film.player.AdBlocker
 import com.dopomine.film.player.resolve.CollapsResolver
 import com.dopomine.film.player.resolve.PlayerSite
+import com.dopomine.film.player.resolve.AniLibertyResolver
+import com.dopomine.film.player.resolve.AnimevostResolver
 import com.dopomine.film.player.resolve.VeoVeoResolver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -59,6 +61,8 @@ class AppContainer(context: Context, testInterceptor: Interceptor? = null) {
     val playerSite = PlayerSite(httpClient)
     val collaps = CollapsResolver(httpClient)
     val veoveo = VeoVeoResolver(httpClient)
+    val aniliberty = AniLibertyResolver(httpClient)
+    val animevost = AnimevostResolver(httpClient)
 }
 
 class DopomineApp : Application(), SingletonImageLoader.Factory {

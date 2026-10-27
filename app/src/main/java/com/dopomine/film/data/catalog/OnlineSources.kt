@@ -67,7 +67,7 @@ class WikidataClient(private val http: OkHttpClient) {
     suspend fun byKinopoiskId(id: Int): Movie? {
         val rows = sparql(
             """
-            SELECT ?ru ?en ?ot ?date ?start ?imdb ?wiki (GROUP_CONCAT(DISTINCT ?typeLabel; separator="|") AS ?types) WHERE {
+            SELECT ?ru ?en ?ot ?date ?start ?imdb ?wiki ?mal (GROUP_CONCAT(DISTINCT ?typeLabel; separator="|") AS ?types) WHERE {
               ?f wdt:P2603 "$id" .
               OPTIONAL { ?f rdfs:label ?ru FILTER(LANG(?ru) = "ru") }
               OPTIONAL { ?f rdfs:label ?en FILTER(LANG(?en) = "en") }
@@ -75,13 +75,14 @@ class WikidataClient(private val http: OkHttpClient) {
               OPTIONAL { ?f wdt:P577 ?date }
               OPTIONAL { ?f wdt:P580 ?start }
               OPTIONAL { ?f wdt:P345 ?imdb }
+              OPTIONAL { ?f wdt:P4086 ?mal }
               OPTIONAL { ?a schema:about ?f ; schema:isPartOf <https://ru.wikipedia.org/> ; schema:name ?wiki }
               OPTIONAL { ?f wdt:P31 ?t . ?t rdfs:label ?typeLabel FILTER(LANG(?typeLabel) = "en") }
-            } GROUP BY ?ru ?en ?ot ?date ?start ?imdb ?wiki LIMIT 1
+            } GROUP BY ?ru ?en ?ot ?date ?start ?imdb ?wiki ?mal LIMIT 1
             """.trimIndent()
         ) ?: return null
         val row = rows.firstOrNull()?.jsonObject ?: return null
-        val title = row.v("ru") ?: row.v("ot") ?: row.v("en") ?: return null
+        val title = row.v("ru") ?: row.v("en") ?: row.v("ot") ?: return null
         val types = row.v("types").orEmpty().lowercase()
         val type = when {
             "miniseries" in types -> ContentType.MINI
@@ -97,6 +98,7 @@ class WikidataClient(private val http: OkHttpClient) {
             type = type,
             imdbId = row.v("imdb"),
             wiki = row.v("wiki"),
+            malId = row.v("mal")?.toIntOrNull(),
         )
     }
 

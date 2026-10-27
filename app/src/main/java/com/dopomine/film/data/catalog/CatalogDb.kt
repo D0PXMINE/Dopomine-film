@@ -30,10 +30,10 @@ class CatalogDb(context: Context) {
     private fun open(): SQLiteDatabase {
         // a downloaded update is swapped in before the database is opened
         if (pendingFile.exists()) {
-            if (versionOf(pendingFile) != null) pendingFile.renameTo(file) else pendingFile.delete()
+            if (isCompatible(pendingFile)) pendingFile.renameTo(file) else pendingFile.delete()
         }
         val bundled = bundledVersion()
-        val installed = if (file.exists()) versionOf(file) else null
+        val installed = if (file.exists() && isCompatible(file)) versionOf(file) else null
         if (installed == null || (bundled != null && bundled > installed)) {
             copyBundled()
         }
@@ -55,6 +55,16 @@ class CatalogDb(context: Context) {
             d.rawQuery("SELECT value FROM meta WHERE key = 'version'", null).use { c -> if (c.moveToFirst()) c.getString(0) else null }
         }
     }.getOrNull()
+
+    /** A valid catalog with the columns this app reads (older snapshots lack `mal`). */
+    fun isCompatible(f: File): Boolean = runCatching {
+        SQLiteDatabase.openDatabase(f.path, null, SQLiteDatabase.OPEN_READONLY).use { d ->
+            val schema = d.rawQuery("SELECT value FROM meta WHERE key = 'schema'", null)
+                .use { c -> if (c.moveToFirst()) c.getString(0).toIntOrNull() else null } ?: 1
+            val version = d.rawQuery("SELECT value FROM meta WHERE key = 'version'", null).use { c -> c.moveToFirst() }
+            version && schema >= SCHEMA
+        }
+    }.getOrDefault(false)
 
     suspend fun version(): String? = withContext(Dispatchers.IO) {
         database().rawQuery("SELECT value FROM meta WHERE key = 'version'", null).use { c -> if (c.moveToFirst()) c.getString(0) else null }
@@ -106,6 +116,7 @@ class CatalogDb(context: Context) {
                 seasons = getIntOrNull(15),
                 episodes = getIntOrNull(16),
                 wiki = getStringOrNull(17),
+                malId = getIntOrNull(18),
             )
         }
         return out
@@ -118,6 +129,9 @@ class CatalogDb(context: Context) {
     companion object {
         private const val COLUMNS =
             "kp, title, original, year, end_year, type, animated, genres, countries, kp_rating, kp_votes, " +
-                "imdb_rating, imdb_votes, duration, imdb, seasons, episodes, wiki"
+                "imdb_rating, imdb_votes, duration, imdb, seasons, episodes, wiki, mal"
+
+        /** Catalog schema this app reads; matches SCHEMA_VERSION in build_catalog.py. */
+        const val SCHEMA = 2
     }
 }
