@@ -12,6 +12,9 @@ import com.dopomine.film.player.resolve.AnimevostResolver
 import com.dopomine.film.player.resolve.Playable
 import com.dopomine.film.player.resolve.PlayerSite
 import com.dopomine.film.player.resolve.VeoVeoResolver
+import com.dopomine.film.player.skip.SegmentKind
+import com.dopomine.film.player.skip.SkipRequest
+import com.dopomine.film.player.skip.SkipSegmentsProvider
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -121,5 +124,22 @@ class OnlineSourcesTest {
         val frierenShow = resolver.resolve(frieren) { println(it) } as Playable.Series
         println("frieren: " + frierenShow.seasons.joinToString { "${it.number}:${it.episodes.size}" })
         assertEquals(28, frierenShow.seasons.first().episodes.size)
+    }
+
+    // ---- intro skipping -------------------------------------------------------------------------
+
+    @Test
+    fun introDatabasesAnswer() = runBlocking {
+        assumeTrue(System.getProperty("dpm.online") == "true")
+        val provider = SkipSegmentsProvider(http)
+        val got = provider.fetch(SkipRequest("tt0944947", null, 1, 3, 3_440_000)) { println(it) }
+        println("GoT s1e3: $got")
+        assertTrue(got.any { it.kind == SegmentKind.INTRO && it.endMs!! in 60_000..140_000 })
+        val frieren = provider.fetch(SkipRequest(null, 52991, 1, 2, 1_560_000)) { println(it) }
+        println("Frieren e2: $frieren")
+        assertEquals("AniSkip", frieren.first { it.kind == SegmentKind.INTRO }.source)
+        val matrix = provider.fetch(SkipRequest("tt0133093", null, null, null, 8_160_000)) { println(it) }
+        println("Matrix: $matrix")
+        assertTrue(matrix.isNotEmpty())
     }
 }

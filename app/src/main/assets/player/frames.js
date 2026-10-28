@@ -101,6 +101,7 @@
     // ---- Video progress tracking (resume playback, PiP state) ------------------------------
     var active = null;
     var lastSent = 0;
+    var lastTick = 0;
 
     function dur(v) {
         var d = v.duration;
@@ -137,6 +138,12 @@
             case 'timeupdate':
                 if (d >= MIN_DURATION) {
                     var now = Date.now();
+                    // once a second: lets the app skip intros in the site's own player too
+                    if (now - lastTick > 900) {
+                        lastTick = now;
+                        active = v;
+                        post({ type: 'time', t: v.currentTime, d: d });
+                    }
                     if (now - lastSent > 10000) {
                         lastSent = now;
                         post({ type: 'progress', t: v.currentTime, d: d });

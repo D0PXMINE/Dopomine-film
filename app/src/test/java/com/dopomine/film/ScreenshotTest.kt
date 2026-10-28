@@ -28,6 +28,8 @@ import com.dopomine.film.player.resolve.Playable
 import com.dopomine.film.player.resolve.Season
 import com.dopomine.film.player.resolve.Stream
 import com.dopomine.film.player.resolve.StreamFormat
+import com.dopomine.film.player.skip.Segment
+import com.dopomine.film.player.skip.SegmentKind
 import com.dopomine.film.player.ui.PlayerControls
 import com.dopomine.film.player.ui.PlayerScreen
 import com.dopomine.film.ui.components.LocalAnimations
@@ -253,6 +255,12 @@ class ScreenshotTest {
         override fun readLevel(kind: GestureKind) = 0.5f
         override fun setLevel(kind: GestureKind, value: Float) = Unit
         override fun gestureEnd() = Unit
+        override fun skipSegment() = Unit
+        override fun undoSkip() = Unit
+        override fun cancelNextEpisode() = Unit
+        override fun toggleAutoSkip() = Unit
+        override fun markIntro() = Unit
+        override fun clearIntroMark() = Unit
     }
 
     @Test
@@ -323,5 +331,37 @@ class ScreenshotTest {
         compose.setContent { DopomineTheme(ThemeMode.DARK) { PlayerScreen(session, state, NoControls, gesturesEnabled = true) } }
         settle()
         captureScreenRoboImage("$out/14_player_anime_sources.png")
+    }
+
+    @OptIn(ExperimentalRoborazziApi::class)
+    @Test
+    @Config(qualifiers = "w880dp-h400dp-xxhdpi")
+    fun playerSkipIntro() {
+        val intro = Segment(SegmentKind.INTRO, 6_000, 102_000, "TheIntroDB")
+        val session = playerSession().apply {
+            resumedAt = null
+            autoSkip = true
+            segments = listOf(intro, Segment(SegmentKind.CREDITS, 3_366_000, 3_437_000, "IntroDB"))
+            activeSegment = intro
+        }
+        val state = nativeState().apply { positionMs = 40_000 }
+        compose.setContent { DopomineTheme(ThemeMode.DARK) { PlayerScreen(session, state, NoControls, gesturesEnabled = true) } }
+        settle()
+        captureScreenRoboImage("$out/15_player_skip_intro.png")
+    }
+
+    @OptIn(ExperimentalRoborazziApi::class)
+    @Test
+    @Config(qualifiers = "w880dp-h400dp-xxhdpi")
+    fun playerSkipSheet() {
+        val session = playerSession().apply {
+            resumedAt = null
+            segments = listOf(Segment(SegmentKind.INTRO, 6_000, 102_000, "TheIntroDB"), Segment(SegmentKind.CREDITS, 3_366_000, 3_437_000, "IntroDB"))
+            introMark = 30 to 95
+            sheet = Sheet.SKIP
+        }
+        compose.setContent { DopomineTheme(ThemeMode.DARK) { PlayerScreen(session, nativeState(), NoControls, gesturesEnabled = true) } }
+        settle()
+        captureScreenRoboImage("$out/16_player_skip_sheet.png")
     }
 }

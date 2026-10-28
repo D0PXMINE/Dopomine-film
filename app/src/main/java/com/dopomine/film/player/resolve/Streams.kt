@@ -1,6 +1,7 @@
 package com.dopomine.film.player.resolve
 
 import androidx.compose.runtime.Immutable
+import com.dopomine.film.player.skip.Segment
 
 enum class StreamFormat { HLS, DASH, PROGRESSIVE }
 
@@ -22,6 +23,8 @@ data class Stream(
     val subtitles: List<Subtitle> = emptyList(),
     /** Separate files per quality, best first; [url] is one of them. Empty for adaptive playlists. */
     val variants: List<Variant> = emptyList(),
+    /** Intro / credits marks the source itself publishes for this file (AniLiberty does). */
+    val segments: List<Segment> = emptyList(),
 ) {
     fun withVariant(v: Variant) = copy(url = v.url, format = formatOf(v.url))
 
@@ -41,7 +44,7 @@ data class Stream(
 data class Episode(val season: Int, val number: Int, val title: String?, val stream: Stream)
 
 @Immutable
-data class Season(val number: Int, val episodes: List<Episode>)
+data class Season(val number: Int, val episodes: List<Episode>, val malId: Int? = null)
 
 /** What a source returned for a title. */
 @Immutable

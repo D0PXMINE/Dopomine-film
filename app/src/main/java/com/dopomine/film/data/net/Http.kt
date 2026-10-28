@@ -41,6 +41,8 @@ object Http {
                 host == "rating.kinopoisk.ru" -> TimeUnit.HOURS.toSeconds(12)
                 host.endsWith("wikipedia.org") -> TimeUnit.DAYS.toSeconds(7)
                 host == "query.wikidata.org" -> TimeUnit.DAYS.toSeconds(3)
+                // intro timestamps change rarely
+                host == "api.introdb.app" || host == "api.theintrodb.org" || host == "api.aniskip.com" -> TimeUnit.DAYS.toSeconds(3)
                 else -> return response
             }
             return response.newBuilder()

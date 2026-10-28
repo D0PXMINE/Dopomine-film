@@ -92,6 +92,7 @@ fun SettingsScreen(nav: Nav) {
                     Toggle("Горизонтальный режим", "Открывать плеер сразу в альбомной ориентации", s.landscapePlayer, vm::setLandscape)
                     Toggle("Продолжать с места остановки", "Запоминать позицию для каждого фильма и серии", s.autoResume, vm::setAutoResume)
                     Toggle("Следующая серия", "Включать следующую серию автоматически", s.autoNext, vm::setAutoNext)
+                    Toggle("Пропускать заставки", "Заставки и пересказы — сразу, на титрах — следующая серия. Кнопка «Пропустить» есть всегда", s.autoSkip, vm::setAutoSkip)
                     Toggle("Жесты", "Свайп слева — яркость, справа — громкость, по горизонтали — перемотка", s.gestures, vm::setGestures)
                     Spacer(Modifier.height(8.dp))
                     Text("Адрес плеера", style = Type.item, color = T.text)

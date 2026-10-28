@@ -47,6 +47,8 @@ class WebPlayer(
         fun onStreamFound(stream: Stream)
         fun onSources(items: List<String>, selected: Int)
         fun onPlayingChanged(playing: Boolean)
+        /** Position of the page's video, about once a second while it plays. */
+        fun onVideoTime(seconds: Double, duration: Double)
         fun onPageError(message: String)
         fun onShowFullscreen(view: View, callback: WebChromeClient.CustomViewCallback)
         fun onHideFullscreen()
@@ -132,6 +134,10 @@ class WebPlayer(
             "state", "video", "progress" -> {
                 videoProxy = reply
                 if (json.optString("type") == "state") listener.onPlayingChanged(json.optBoolean("playing"))
+            }
+            "time" -> {
+                videoProxy = reply
+                listener.onVideoTime(json.optDouble("t"), json.optDouble("d"))
             }
         }
     }
@@ -224,6 +230,9 @@ class WebPlayer(
         view.removeAllViews()
         view.destroy()
     }
+
+    /** Seeks the video playing in the page (the site's own player). */
+    fun seekVideo(seconds: Double) = post(videoProxy, """{"cmd":"seek","t":$seconds}""")
 
     private fun post(proxy: JavaScriptReplyProxy?, json: String) {
         if (proxy == null || !WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) return

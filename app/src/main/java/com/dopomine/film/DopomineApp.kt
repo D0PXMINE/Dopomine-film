@@ -26,6 +26,7 @@ import com.dopomine.film.player.resolve.PlayerSite
 import com.dopomine.film.player.resolve.AniLibertyResolver
 import com.dopomine.film.player.resolve.AnimevostResolver
 import com.dopomine.film.player.resolve.VeoVeoResolver
+import com.dopomine.film.player.skip.SkipSegmentsProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -63,6 +64,7 @@ class AppContainer(context: Context, testInterceptor: Interceptor? = null) {
     val veoveo = VeoVeoResolver(httpClient)
     val aniliberty = AniLibertyResolver(httpClient)
     val animevost = AnimevostResolver(httpClient)
+    val skipSegments = SkipSegmentsProvider(httpClient)
 }
 
 class DopomineApp : Application(), SingletonImageLoader.Factory {
