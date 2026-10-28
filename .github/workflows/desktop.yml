@@ -9,6 +9,11 @@ on:
       - "app/src/main/assets/**"
       - ".github/workflows/desktop.yml"
   workflow_dispatch:
+    inputs:
+      mac:
+        description: "Собрать и для macOS (если GitHub выделит машину с macOS)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -23,13 +28,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: windows-latest
-            targets: --win nsis portable
-          - os: ubuntu-latest
-            targets: --linux AppImage deb
-          - os: macos-latest
-            targets: --mac dmg
+        # macOS runners are not always granted (the job then waits in the queue and is cancelled),
+        # so macOS is built only on request
+        os: ${{ fromJSON(inputs.mac && '["windows-latest","ubuntu-latest","macos-latest"]' || '["windows-latest","ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     defaults:
@@ -49,7 +50,7 @@ jobs:
       - run: npm test
 
       - name: Package
-        run: npx electron-builder ${{ matrix.targets }} --publish never
+        run: npx electron-builder ${{ runner.os == 'Windows' && '--win nsis portable' || runner.os == 'Linux' && '--linux AppImage deb' || '--mac dmg' }} --publish never
         env:
           # no signing certificate: build unsigned
           CSC_IDENTITY_AUTO_DISCOVERY: "false"

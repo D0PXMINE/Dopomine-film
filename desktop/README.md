@@ -13,7 +13,8 @@
 - **Windows** — `Dopomine-Setup-1.0.0.exe` (установщик) или `Dopomine-1.0.0-portable.exe`
   (без установки, просто запустить);
 - **Linux** — `Dopomine-1.0.0.AppImage` или `.deb`;
-- **macOS** — `Dopomine-1.0.0.dmg`.
+- **macOS** — `Dopomine-1.0.0.dmg`: собирается по запросу — Actions → Desktop → Run workflow с галочкой
+  «macOS» (GitHub выделяет машины с macOS не всегда).
 
 Сборки не подписаны сертификатом: Windows SmartScreen покажет «Неизвестный издатель» —
 «Подробнее» → «Выполнить в любом случае»; на macOS — правый клик по приложению → «Открыть».
