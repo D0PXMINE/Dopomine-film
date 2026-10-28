@@ -24,7 +24,7 @@ win:
     - target: portable
       arch: [x64]
   icon: build/icon.ico
-  # editing the exe needs Wine off Windows; scripts/after-pack.mjs sets the icon and version instead
+  # editing the exe needs Wine off Windows; scripts/after-pack.cjs sets the icon and version instead
   signAndEditExecutable: false
 nsis:
   oneClick: false
