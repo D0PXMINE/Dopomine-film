@@ -1,0 +1,44 @@
+{
+  "name": "dopomine-desktop",
+  "productName": "Dopomine",
+  "version": "1.0.0",
+  "description": "Фильмы, сериалы и аниме с рейтингами Кинопоиска и IMDb, свой плеер без рекламы",
+  "author": "dopamine",
+  "license": "GPL-3.0-only",
+  "private": true,
+  "main": "dist/main/main.js",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "tsc --noEmit && vite build && node scripts/build-main.mjs",
+    "start": "electron .",
+    "test": "node scripts/test.mjs",
+    "e2e": "node test/e2e.mjs",
+    "dist": "npm run build && electron-builder",
+    "dist:win": "npm run build && electron-builder --win",
+    "dist:linux": "npm run build && electron-builder --linux"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.30",
+    "@types/react": "19.1.8",
+    "@types/react-dom": "19.1.6",
+    "@types/sql.js": "^1.4.9",
+    "@vitejs/plugin-react": "4.7.0",
+    "electron": "44.7.0",
+    "electron-builder": "26.17.0",
+    "esbuild": "0.25.5",
+    "hls.js": "1.7.3",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "resedit": "2.0.3",
+    "sql.js": "1.13.0",
+    "typescript": "5.8.3",
+    "vite": "6.3.5"
+  },
+  "desktopName": "dopomine.desktop",
+  "homepage": "https://github.com/D0PXMINE/Dopomine-film",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/D0PXMINE/Dopomine-film.git",
+    "directory": "desktop"
+  }
+}
