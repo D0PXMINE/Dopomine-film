@@ -30,6 +30,8 @@ data class AppSettings(
     val autoResume: Boolean = true,
     val gestures: Boolean = true,
     val autoNext: Boolean = true,
+    /** Skip intros and recaps on their own, and go to the next episode at the credits. */
+    val autoSkip: Boolean = false,
     val catalogCheckedAt: Long = 0L,
 )
 
@@ -45,6 +47,8 @@ class SettingsRepository(context: Context, scope: CoroutineScope) {
         val autoResume = booleanPreferencesKey("auto_resume")
         val gestures = booleanPreferencesKey("gestures")
         val autoNext = booleanPreferencesKey("auto_next")
+        val autoSkip = booleanPreferencesKey("auto_skip")
+        fun introMark(movieId: Int) = stringPreferencesKey("intro_mark_$movieId")
         val catalogCheckedAt = longPreferencesKey("catalog_checked_at")
     }
 
@@ -59,6 +63,7 @@ class SettingsRepository(context: Context, scope: CoroutineScope) {
             autoResume = this[Keys.autoResume] ?: d.autoResume,
             gestures = this[Keys.gestures] ?: d.gestures,
             autoNext = this[Keys.autoNext] ?: d.autoNext,
+            autoSkip = this[Keys.autoSkip] ?: d.autoSkip,
             catalogCheckedAt = this[Keys.catalogCheckedAt] ?: 0L,
         )
     }
@@ -79,6 +84,17 @@ class SettingsRepository(context: Context, scope: CoroutineScope) {
     suspend fun setAutoResume(value: Boolean) = store.edit { it[Keys.autoResume] = value }
     suspend fun setGestures(value: Boolean) = store.edit { it[Keys.gestures] = value }
     suspend fun setAutoNext(value: Boolean) = store.edit { it[Keys.autoNext] = value }
+    suspend fun setAutoSkip(value: Boolean) = store.edit { it[Keys.autoSkip] = value }
+
+    /** The intro a viewer marked by hand for a title (seconds), used when no database knows it. */
+    suspend fun introMark(movieId: Int): Pair<Int, Int>? =
+        store.data.first()[Keys.introMark(movieId)]?.split(',')?.mapNotNull { it.toIntOrNull() }
+            ?.takeIf { it.size == 2 && it[1] > it[0] }?.let { it[0] to it[1] }
+
+    suspend fun setIntroMark(movieId: Int, mark: Pair<Int, Int>?) = store.edit {
+        if (mark == null) it.remove(Keys.introMark(movieId)) else it[Keys.introMark(movieId)] = "${mark.first},${mark.second}"
+    }
+
     suspend fun setCatalogCheckedAt(value: Long) = store.edit { it[Keys.catalogCheckedAt] = value }
 
     companion object {

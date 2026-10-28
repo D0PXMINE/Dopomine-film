@@ -51,8 +51,13 @@ import com.dopomine.film.player.resolve.AnimevostResolver
 import com.dopomine.film.player.resolve.Playable
 import com.dopomine.film.player.resolve.SourceInfo
 import com.dopomine.film.player.resolve.Stream
+import com.dopomine.film.player.skip.Segment
+import com.dopomine.film.player.skip.SegmentKind
+import com.dopomine.film.player.skip.SegmentRules
+import com.dopomine.film.player.skip.SkipRequest
 import com.dopomine.film.player.ui.PlayerControls
 import com.dopomine.film.player.ui.PlayerScreen
+import com.dopomine.film.ui.components.Format
 import com.dopomine.film.ui.theme.DopomineTheme
 import com.dopomine.film.ui.theme.ThemeMode
 import kotlinx.coroutines.CancellationException
@@ -88,6 +93,7 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
         private const val ACTION_PIP_TOGGLE = "com.dopomine.film.PIP_TOGGLE"
         private const val SNIFF_TIMEOUT_MS = 30_000L
         private const val MAX_NETWORK_RETRIES = 2
+        private const val NEXT_COUNTDOWN = 5
 
         fun intent(context: Context, movie: Movie): Intent =
             Intent(context, PlayerActivity::class.java)
@@ -142,6 +148,16 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
     private var itemSeason: Int? = null
     private var itemEpisode: Int? = null
     private var durationResumeChecked = false
+
+    // intro skipping
+    private var sourceSegments: List<Segment> = emptyList()
+    private var segmentsRequested = false
+    private var segmentsGeneration = 0
+    private var segmentsJob: Job? = null
+    private var countdownJob: Job? = null
+    /** Segments skipped (or declined) in the current video: never skipped automatically again. */
+    private val doneSegments = HashSet<Segment>()
+    private var webDurationMs = 0L
     private var networkRetries = 0
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
     private var customView: View? = null
@@ -165,6 +181,7 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
 
         session.title = movie.title
         session.canPip = packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
+        session.autoSkip = settings.autoSkip
 
         native = NativePlayer(this, container.mediaClient).apply {
             onEnded = ::onItemEnded
@@ -290,6 +307,8 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
             }
         }
         log("Фильм: ${movie.title} (Кинопоиск ${movie.id}${if (movie.isAnime) ", аниме" else ""})")
+        session.introMark = container.settings.introMark(movie.id)
+        session.markStart = null
 
         val sources = runCatching { container.playerSite.sources(mirror, movie.id, movie.imdbId) }
             .onFailure { if (it is CancellationException) throw it; log("Список плееров не получен: ${it.message}") }
@@ -464,6 +483,7 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
         itemKey = key
         itemSeason = season
         itemEpisode = episode
+        resetSegments(stream.segments)
         val start = if (key != null && settings.autoResume) {
             container.library.position(movie.id, key)?.takeIf { it > 30 }?.let { it * 1000L } ?: 0L
         } else 0L
@@ -501,6 +521,8 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
         w.setSniffing(false)
         session.playable = null
         session.currentChoice = SourceChoice.SITE_PLAYER
+        resetSegments(emptyList())
+        webDurationMs = 0L
         session.mode = Mode.WEB
         session.subtitle = "Плеер сайта"
         playerView.visibility = View.GONE
@@ -521,12 +543,166 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
                     durationResumeChecked = true
                     resumeByDuration()
                 }
+                if (!segmentsRequested && native.state.durationMs > 0) {
+                    segmentsRequested = true
+                    loadSegments(native.exo.duration, itemSeason, itemEpisode)
+                }
+                checkSegments(native.exo.currentPosition, native.exo.duration, native.state.isPlaying)
                 sinceSave++
                 if (sinceSave >= 10 && native.state.isPlaying) {
                     sinceSave = 0
                     saveProgress()
                 }
             }
+        }
+    }
+
+    // ---- Intro skipping ---------------------------------------------------------------------------
+
+    private fun resetSegments(own: List<Segment>) {
+        sourceSegments = own
+        segmentsRequested = false
+        segmentsJob?.cancel()
+        doneSegments.clear()
+        cancelCountdown()
+        session.segments = emptyList()
+        session.activeSegment = null
+        session.skipped = null
+    }
+
+    /** Asks the intro databases once the duration is known (it tells their cuts apart). */
+    private fun loadSegments(duration: Long, season: Int?, episode: Int?) {
+        if (duration <= 0) return
+        val own = sourceSegments
+        val mark = session.introMark?.let { (a, b) -> listOf(Segment(SegmentKind.INTRO, a * 1000L, b * 1000L, "Ваша разметка")) }.orEmpty()
+        // a caught stream of a show has no episode number, so only the viewer's own mark applies to it
+        val lookup = !(movie.type.isSeries && episode == null)
+        val mal = (session.playable as? Playable.Series)?.seasons?.firstOrNull { it.number == season }?.malId
+            ?: movie.malId.takeIf { season == null || season == 1 }
+        val request = SkipRequest(movie.imdbId, mal, season, episode, duration)
+        val generation = ++segmentsGeneration
+        segmentsJob = lifecycleScope.launch {
+            val found = if (lookup) runCatching { container.skipSegments.fetch(request, ::log) }.getOrDefault(emptyList()) else emptyList()
+            if (generation != segmentsGeneration) return@launch
+            session.segments = SegmentRules.merge(duration, own, found, mark)
+            if (session.segments.isNotEmpty()) {
+                log("Пропуск: " + session.segments.joinToString { s ->
+                    "${s.kind.title.lowercase()} ${Format.clock((s.startMs / 1000).toInt())}–${s.endMs?.let { Format.clock((it / 1000).toInt()) } ?: "конец"} (${s.source})"
+                })
+            }
+        }
+    }
+
+    private fun checkSegments(position: Long, duration: Long, playing: Boolean) {
+        if (duration <= 0) return
+        val segment = session.segments.firstOrNull { it.contains(position, duration) }
+        if (segment?.kind != SegmentKind.CREDITS && session.nextCountdown != null) cancelCountdown()
+        when {
+            segment == null -> session.activeSegment = null
+            // a film's credits lead nowhere; a show's lead to the next episode
+            segment.kind == SegmentKind.CREDITS -> {
+                if (nextEpisodeRef() == null) {
+                    session.activeSegment = null
+                } else {
+                    session.activeSegment = segment
+                    if (session.autoSkip && segment !in doneSegments && countdownJob == null && playing) startCountdown(segment)
+                }
+            }
+            session.autoSkip && segment !in doneSegments -> {
+                doneSegments += segment
+                seekCurrent(segment.end(duration))
+                session.activeSegment = null
+                session.skipped = segment
+            }
+            else -> session.activeSegment = segment
+        }
+    }
+
+    private fun startCountdown(segment: Segment) {
+        countdownJob = lifecycleScope.launch {
+            for (left in NEXT_COUNTDOWN downTo 1) {
+                session.nextCountdown = left
+                delay(1_000)
+                if (!native.state.isPlaying) {
+                    cancelCountdown()
+                    return@launch
+                }
+            }
+            countdownJob = null
+            session.nextCountdown = null
+            doneSegments += segment
+            nextEpisode()
+        }
+    }
+
+    private fun cancelCountdown() {
+        countdownJob?.cancel()
+        countdownJob = null
+        session.nextCountdown = null
+    }
+
+    override fun skipSegment() {
+        val segment = session.activeSegment ?: return
+        doneSegments += segment
+        session.activeSegment = null
+        if (segment.kind == SegmentKind.CREDITS && nextEpisodeRef() != null) {
+            cancelCountdown()
+            nextEpisode()
+        } else {
+            seekCurrent(segment.end(if (session.mode == Mode.WEB) webDurationMs else native.exo.duration))
+        }
+    }
+
+    override fun undoSkip() {
+        val segment = session.skipped ?: return
+        session.skipped = null
+        seekCurrent(segment.startMs)
+    }
+
+    private fun seekCurrent(ms: Long) {
+        if (session.mode == Mode.WEB) web?.seekVideo(ms / 1000.0) else native.seekTo(ms)
+    }
+
+    override fun cancelNextEpisode() {
+        session.activeSegment?.let { doneSegments += it }
+        cancelCountdown()
+    }
+
+    override fun toggleAutoSkip() {
+        val value = !session.autoSkip
+        session.autoSkip = value
+        flash(if (value) "Автопропуск заставок включён" else "Автопропуск заставок выключен")
+        lifecycleScope.launch { container.settings.setAutoSkip(value) }
+    }
+
+    /** First tap marks where the intro starts, the second where it ends; it then applies to every episode. */
+    override fun markIntro() {
+        val position = ((if (session.mode == Mode.WEB) session.webPositionMs else native.exo.currentPosition) / 1000).toInt()
+        val start = session.markStart
+        if (start == null || position <= start + 3) {
+            session.markStart = position
+            return
+        }
+        val mark = start to position
+        session.markStart = null
+        session.introMark = mark
+        lifecycleScope.launch { container.settings.setIntroMark(movie.id, mark) }
+        log("Ваша разметка заставки: ${Format.clock(start)}–${Format.clock(position)}")
+        segmentsRequested = false
+    }
+
+    override fun clearIntroMark() {
+        session.introMark = null
+        session.markStart = null
+        lifecycleScope.launch { container.settings.setIntroMark(movie.id, null) }
+        segmentsRequested = false
+    }
+
+    private fun flash(text: String) {
+        session.seekHint = text
+        lifecycleScope.launch {
+            delay(1_200)
+            if (session.seekHint == text) session.seekHint = null
         }
     }
 
@@ -749,6 +925,24 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
     override fun onPlayingChanged(playing: Boolean) {
         // the hidden page must never play over the native player
         if (playing && session.mode == Mode.NATIVE && !session.webOverlay) web?.muteAll()
+    }
+
+    /** The site's own player: the same skipping, driven by the page's video position. */
+    override fun onVideoTime(seconds: Double, duration: Double) {
+        if (session.mode != Mode.WEB || seconds.isNaN() || duration.isNaN()) return
+        val position = (seconds * 1000).toLong()
+        val length = (duration * 1000).toLong()
+        session.webPositionMs = position
+        // another video started in the page (another episode or source)
+        if (kotlin.math.abs(length - webDurationMs) > 2_000) {
+            webDurationMs = length
+            resetSegments(emptyList())
+        }
+        if (!segmentsRequested) {
+            segmentsRequested = true
+            loadSegments(length, null, null)
+        }
+        checkSegments(position, length, playing = true)
     }
 
     override fun onPageError(message: String) {

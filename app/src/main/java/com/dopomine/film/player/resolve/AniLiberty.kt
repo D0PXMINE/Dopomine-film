@@ -2,6 +2,8 @@ package com.dopomine.film.player.resolve
 
 import com.dopomine.film.data.model.Movie
 import com.dopomine.film.data.net.text
+import com.dopomine.film.player.skip.Segment
+import com.dopomine.film.player.skip.SegmentKind
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -76,7 +78,7 @@ class AniLibertyResolver(private val http: OkHttpClient) {
             .let { list -> if (list.any { it.id == release.id }) list else listOf(release) }
             .take(MAX_SEASONS)
         val seasons = coroutineScope {
-            chain.mapIndexed { index, r -> async { runCatching { Season(index + 1, episodes(host, r.id, index + 1)) }.getOrNull() } }
+            chain.mapIndexed { index, r -> async { runCatching { Season(index + 1, episodes(host, r.id, index + 1), r.mal) }.getOrNull() } }
                 .awaitAll()
         }.filterNotNull().filter { it.episodes.isNotEmpty() }
         if (seasons.isEmpty()) throw ResolveException("AniLiberty: нет серий")
@@ -116,9 +118,19 @@ class AniLibertyResolver(private val http: OkHttpClient) {
                 .mapNotNull { (label, key) -> e.str(key)?.let { Variant(label, clean(it)) } }
             val best = variants.firstOrNull() ?: return@mapIndexedNotNull null
             val number = if (wholeNumbers) (e["ordinal"] as JsonPrimitive).doubleOrNull!!.toInt() else index + 1
-            Episode(season, number, e.str("name"), Stream(best.url, StreamFormat.HLS, variants = variants))
+            Episode(season, number, e.str("name"), Stream(best.url, StreamFormat.HLS, variants = variants, segments = marks(e)))
         }
     }
+
+    /** Their own opening / ending marks: `"opening":{"start":1,"stop":89}`, in seconds. */
+    private fun marks(e: JsonObject): List<Segment> =
+        listOf("opening" to SegmentKind.INTRO, "ending" to SegmentKind.CREDITS).mapNotNull { (key, kind) ->
+            val o = e[key] as? JsonObject ?: return@mapNotNull null
+            val start = o.int("start") ?: return@mapNotNull null
+            val stop = o.int("stop")
+            if (stop == null && kind == SegmentKind.INTRO) return@mapNotNull null
+            Segment(kind, start * 1000L, stop?.let { it * 1000L }, NAME)
+        }
 
     private fun release(el: JsonElement): Release? {
         val o = el as? JsonObject ?: return null

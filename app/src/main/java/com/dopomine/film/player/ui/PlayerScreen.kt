@@ -40,9 +40,11 @@ import androidx.compose.material.icons.rounded.AspectRatio
 import androidx.compose.material.icons.rounded.BrightnessMedium
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ClosedCaption
+import androidx.compose.material.icons.rounded.FastForward
 import androidx.compose.material.icons.rounded.Forward10
 import androidx.compose.material.icons.rounded.HighQuality
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.MoreTime
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PictureInPictureAlt
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -88,6 +90,8 @@ import com.dopomine.film.player.PlayerSession
 import com.dopomine.film.player.Sheet
 import com.dopomine.film.player.TrackOption
 import com.dopomine.film.player.resolve.Playable
+import com.dopomine.film.player.skip.SegmentKind
+import com.dopomine.film.ui.components.Caps
 import com.dopomine.film.ui.components.Format
 import com.dopomine.film.ui.components.Halftone
 import com.dopomine.film.ui.components.HalftoneVariant
@@ -121,6 +125,14 @@ interface PlayerControls {
     fun readLevel(kind: GestureKind): Float
     fun setLevel(kind: GestureKind, value: Float)
     fun gestureEnd()
+
+    // intro skipping
+    fun skipSegment()
+    fun undoSkip()
+    fun cancelNextEpisode()
+    fun toggleAutoSkip()
+    fun markIntro()
+    fun clearIntroMark()
 }
 
 private val Scrim = Color(0xB3000000)
@@ -232,6 +244,23 @@ private fun NativeLayer(session: PlayerSession, state: NativeState, controls: Pl
                 Text("Продолжаем с ${Format.clock(pos)}", style = Type.mono, color = White)
                 Spacer(Modifier.width(8.dp))
                 DarkPill("С начала", small = true) { controls.restartFromBeginning() }
+            }
+        }
+
+        SkipOverlay(session, controls, Modifier.align(Alignment.BottomEnd).padding(end = 24.dp, bottom = if (visible) 104.dp else 28.dp))
+
+        session.skipped?.let { segment ->
+            LaunchedEffect(segment) { delay(6_000); if (session.skipped == segment) session.skipped = null }
+            Row(
+                Modifier.align(Alignment.BottomStart).padding(start = 16.dp, bottom = if (visible) 104.dp else 28.dp)
+                    .clip(RoundedCornerShape(999.dp)).background(Color(0xE6121212))
+                    .border(1.dp, White20, RoundedCornerShape(999.dp))
+                    .padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("${segment.kind.title} пропущен${if (segment.kind == SegmentKind.INTRO) "а" else ""}", style = Type.mono, color = White)
+                Spacer(Modifier.width(8.dp))
+                DarkPill("Вернуть", small = true) { controls.undoSkip() }
             }
         }
 
@@ -385,6 +414,8 @@ private fun BottomBar(session: PlayerSession, state: NativeState, controls: Play
             if (state.texts.size > 1) item {
                 DarkPill(if (state.texts.firstOrNull()?.selected == true) "Субтитры" else "Субтитры вкл.", Icons.Rounded.ClosedCaption, small = true) { controls.openSheet(Sheet.SUBTITLES) }
             }
+            item { DarkPill("Автопропуск", Icons.Rounded.FastForward, small = true, primary = session.autoSkip) { controls.toggleAutoSkip() } }
+            item { DarkPill(if (session.segments.any { it.kind == SegmentKind.INTRO }) "Заставка" else "Заставка ?", Icons.Rounded.MoreTime, small = true) { controls.openSheet(Sheet.SKIP) } }
             item { DarkPill("${formatSpeed(state.speed)}×", Icons.Rounded.Speed, small = true) { controls.openSheet(Sheet.SPEED) } }
             item {
                 DarkPill(listOf("Вписать", "Заполнить", "Растянуть")[session.resize], Icons.Rounded.AspectRatio, small = true) { controls.cycleResize() }
@@ -451,10 +482,15 @@ private fun WebChrome(session: PlayerSession, controls: PlayerControls) {
                     val sub = listOfNotNull(session.subtitle, if (session.blocked > 0) "заблокировано рекламы: ${session.blocked}" else null).joinToString(" · ")
                     Text(sub, style = Type.monoSmall, color = White60, maxLines = 1)
                 }
+                DarkPill("Автопропуск", Icons.Rounded.FastForward, small = true, primary = session.autoSkip) { controls.toggleAutoSkip() }
+                Spacer(Modifier.width(6.dp))
+                DarkPill("Заставка", Icons.Rounded.MoreTime, small = true) { controls.openSheet(Sheet.SKIP) }
+                Spacer(Modifier.width(6.dp))
                 DarkPill("Источник", Icons.Rounded.Tune, small = true) { controls.openSheet(Sheet.SOURCES) }
                 RoundButton(Icons.Rounded.ScreenRotation, "Повернуть", onClick = controls::rotate)
             }
         }
+        SkipOverlay(session, controls, Modifier.align(Alignment.BottomEnd).padding(end = 24.dp, bottom = 72.dp))
         AnimatedVisibility(!session.controlsVisible && !session.webFullscreen, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.TopCenter)) {
             Box(Modifier.clip(RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp)).clickable { session.controlsVisible = true }.padding(horizontal = 18.dp, vertical = 6.dp)) {
                 Icon(Icons.Rounded.KeyboardArrowDown, "Показать меню", tint = Color(0x80FFFFFF), modifier = Modifier.size(22.dp))
@@ -533,6 +569,7 @@ private fun PlayerSheet(sheet: Sheet, session: PlayerSession, state: NativeState
                         OptionRow("${formatSpeed(s)}×", if (s == 1f) "Обычная" else null, state.speed == s) { controls.setSpeed(s) }
                     }
                 }
+                Sheet.SKIP -> SkipSheet(session, if (session.mode == Mode.WEB) session.webPositionMs else state.positionMs, controls)
                 Sheet.LOG -> {
                     SheetTitle("Журнал", "Что делал плеер, пока искал видео. Пригодится, если что-то не работает.")
                     val list = rememberLazyListState()
@@ -543,6 +580,57 @@ private fun PlayerSheet(sheet: Sheet, session: PlayerSession, state: NativeState
                 }
             }
         }
+    }
+}
+
+/** "Skip intro" / "Next episode" button, with the countdown when auto-skip runs into the credits. */
+@Composable
+private fun SkipOverlay(session: PlayerSession, controls: PlayerControls, modifier: Modifier) {
+    val segment = session.activeSegment ?: return
+    if (session.sheet != null || session.inPip) return
+    val countdown = session.nextCountdown
+    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (countdown != null) DarkPill("Отмена") { controls.cancelNextEpisode() }
+        val label = when {
+            segment.kind == SegmentKind.CREDITS && countdown != null -> "Следующая серия через $countdown"
+            segment.kind == SegmentKind.CREDITS -> "Следующая серия"
+            else -> segment.kind.skipLabel
+        }
+        DarkPill(label, Icons.Rounded.SkipNext, primary = true) { controls.skipSegment() }
+    }
+}
+
+@Composable
+private fun SkipSheet(session: PlayerSession, positionMs: Long, controls: PlayerControls) {
+    val position = (positionMs / 1000).toInt()
+    SheetTitle(
+        "Пропуск заставок",
+        "Разметка берётся у источника и из открытых баз TheIntroDB, IntroDB и AniSkip. Если её нет — отметьте заставку сами: она будет пропускаться во всех сериях.",
+    )
+    OptionRow("Пропускать автоматически", "Заставки и пересказы — сразу, на титрах — следующая серия", session.autoSkip) { controls.toggleAutoSkip() }
+    Column(Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
+        Caps("Эта серия")
+        Spacer(Modifier.height(6.dp))
+        if (session.segments.isEmpty()) {
+            Text("Разметки пока нет", style = Type.body, color = T.text2)
+        }
+        session.segments.forEach { s ->
+            val range = "${Format.clock((s.startMs / 1000).toInt())} – ${s.endMs?.let { Format.clock((it / 1000).toInt()) } ?: "конец"}"
+            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(s.kind.title, style = Type.item, color = T.text, modifier = Modifier.width(96.dp))
+                Text(range, style = Type.mono, color = T.text, modifier = Modifier.weight(1f))
+                Text(s.source, style = Type.monoSmall, color = T.text3)
+            }
+        }
+    }
+    val start = session.markStart
+    OptionRow(
+        if (start == null) "Здесь начинается заставка" else "Здесь заканчивается заставка",
+        if (start == null) "Отметить сейчас — ${Format.clock(position)}" else "Начало ${Format.clock(start)}, конец — ${Format.clock(position)}",
+        false,
+    ) { controls.markIntro() }
+    session.introMark?.let { (a, b) ->
+        OptionRow("Удалить мою разметку", "${Format.clock(a)} – ${Format.clock(b)}, для всех серий", false) { controls.clearIntroMark() }
     }
 }
 

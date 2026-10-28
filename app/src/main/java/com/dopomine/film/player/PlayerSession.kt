@@ -1,9 +1,11 @@
 package com.dopomine.film.player
 
 import androidx.compose.runtime.Immutable
+import com.dopomine.film.player.skip.Segment
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -12,7 +14,7 @@ import com.dopomine.film.player.resolve.SourceInfo
 
 enum class Mode { RESOLVING, NATIVE, WEB, ERROR }
 
-enum class Sheet { SOURCES, EPISODES, AUDIO, QUALITY, SUBTITLES, SPEED, LOG }
+enum class Sheet { SOURCES, EPISODES, AUDIO, QUALITY, SUBTITLES, SPEED, SKIP, LOG }
 
 /** One way to play the title, as listed in the "Источник" sheet. */
 @Immutable
@@ -62,6 +64,21 @@ class PlayerSession {
     var webOverlay by mutableStateOf(false)
     var blocked by mutableIntStateOf(0)
     var resize by mutableIntStateOf(0)
+
+    // intro skipping
+    var segments by mutableStateOf<List<Segment>>(emptyList())
+    /** The segment playing right now, offered with a "skip" button. */
+    var activeSegment by mutableStateOf<Segment?>(null)
+    /** Shown after an automatic skip, with a way back. */
+    var skipped by mutableStateOf<Segment?>(null)
+    /** Seconds left before the next episode starts on its own (credits with auto-skip on). */
+    var nextCountdown by mutableStateOf<Int?>(null)
+    var autoSkip by mutableStateOf(false)
+    /** The viewer's own intro mark for this title, seconds; [markStart] while marking. */
+    var introMark by mutableStateOf<Pair<Int, Int>?>(null)
+    var markStart by mutableStateOf<Int?>(null)
+    /** Position of the video in the site's own player (web mode). */
+    var webPositionMs by mutableLongStateOf(0L)
 
     val isSeries: Boolean get() = playable is Playable.Series
 

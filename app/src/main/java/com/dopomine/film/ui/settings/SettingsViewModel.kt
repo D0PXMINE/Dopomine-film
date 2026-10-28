@@ -42,6 +42,7 @@ class SettingsViewModel(private val c: AppContainer) : ViewModel() {
     fun setAutoResume(v: Boolean) = viewModelScope.launch { c.settings.setAutoResume(v) }
     fun setGestures(v: Boolean) = viewModelScope.launch { c.settings.setGestures(v) }
     fun setAutoNext(v: Boolean) = viewModelScope.launch { c.settings.setAutoNext(v) }
+    fun setAutoSkip(v: Boolean) = viewModelScope.launch { c.settings.setAutoSkip(v) }
 
     fun setPlayerHost(host: String) = viewModelScope.launch {
         c.settings.setPlayerHost(host)
