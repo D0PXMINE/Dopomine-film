@@ -1,0 +1,63 @@
+name: Desktop
+
+# Builds the desktop app on each OS and attaches the installers to the "desktop" release
+# (a release, not build artifacts: those have a storage quota).
+on:
+  push:
+    paths:
+      - "desktop/**"
+      - "app/src/main/assets/**"
+      - ".github/workflows/desktop.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            targets: --win nsis portable
+          - os: ubuntu-latest
+            targets: --linux AppImage deb
+          - os: macos-latest
+            targets: --mac dmg
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+      - name: Package
+        run: npx electron-builder ${{ matrix.targets }} --publish never
+        env:
+          # no signing certificate: build unsigned
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Attach to the "desktop" release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          files=(release/*.exe release/*.AppImage release/*.deb release/*.dmg)
+          [ ${#files[@]} -gt 0 ] || { echo "nothing to upload"; exit 1; }
+          gh release view desktop >/dev/null 2>&1 || \
+            gh release create desktop --title "Dopomine для компьютера" --latest=false \
+              --notes "Установщики для Windows, Linux и macOS. Обновляются при каждой сборке." || true
+          gh release upload desktop "${files[@]}" --clobber

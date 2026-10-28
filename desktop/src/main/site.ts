@@ -93,6 +93,7 @@ function siteSession() {
 
 /** Runs a script in every frame of a page (players live in cross-origin iframes). */
 async function inAllFrames(wc: WebContents, code: string): Promise<unknown[]> {
+  if (wc.isDestroyed()) return [];
   const frames: WebFrameMain[] = wc.mainFrame ? wc.mainFrame.framesInSubtree : [];
   return Promise.all(frames.map(f => f.executeJavaScript(code).catch(() => null)));
 }
@@ -127,23 +128,26 @@ export async function sniff(mirror: string, picker: string, kp: number, opts: { 
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   const frames = readAsset("frames.js");
   win.webContents.on("did-frame-finish-load", () => void inAllFrames(win.webContents, "window.__dpmSniff = true;" + frames));
+  let timer: NodeJS.Timeout | undefined;
+  let nudge: NodeJS.Timeout | undefined;
   try {
     return await new Promise<Stream | null>(resolve => {
-      const timer = setTimeout(() => resolve(null), opts.timeoutMs ?? 30_000);
-      const nudge = setInterval(() => void inAllFrames(win.webContents, MUTE_AND_PLAY), 1500);
+      timer = setTimeout(() => resolve(null), opts.timeoutMs ?? 30_000);
+      nudge = setInterval(() => void inAllFrames(win.webContents, MUTE_AND_PLAY), 1500);
       onCatch = s => {
         log(`Найден поток: ${s.url.slice(0, 120)}`);
         if (manifestsOnly && s.format == "PROGRESSIVE") return;
-        clearTimeout(timer);
-        clearInterval(nudge);
         resolve(s);
       };
       const url = opts.embedUrl ?? `${mirror}/${kp}`;
       win.loadURL(url, { httpReferrer: opts.embedUrl ? `https://${picker}/` : `${mirror}/` }).catch(e => log(`Страница не открылась: ${(e as Error).message}`));
     });
   } finally {
+    // the page must not be touched once it is gone (an exception here would stop the whole app)
+    clearTimeout(timer);
+    clearInterval(nudge);
     onCatch = null;
-    win.destroy();
+    if (!win.isDestroyed()) win.destroy();
   }
 }
 
@@ -178,7 +182,7 @@ export function showSite(win: BrowserWindow, mirror: string, picker: string, kp:
   void wc.loadURL(`${mirror}/${kp}`, { httpReferrer: `${mirror}/` });
   // the page's video position, for intro skipping
   timeTimer = setInterval(async () => {
-    if (!view) return;
+    if (!view || view.webContents.isDestroyed()) return;
     const found = await inAllFrames(wc, `(function(){var best=null;document.querySelectorAll('video').forEach(function(v){if(isFinite(v.duration)&&v.duration>60&&(!best||v.duration>best.duration))best=v});return best?[best.currentTime,best.duration]:null})()`);
     const hit = found.find((x): x is [number, number] => Array.isArray(x));
     if (hit) onTime(hit[0], hit[1]);
@@ -190,7 +194,7 @@ export function siteBounds(bounds: Electron.Rectangle) {
 }
 
 export async function siteSeek(seconds: number) {
-  if (!view) return;
+  if (!view || view.webContents.isDestroyed()) return;
   await inAllFrames(view.webContents, `(function(){document.querySelectorAll('video').forEach(function(v){if(isFinite(v.duration)&&v.duration>60)v.currentTime=${Number(seconds)}})})()`);
 }
 
@@ -198,8 +202,8 @@ export function hideSite(win: BrowserWindow) {
   if (timeTimer) clearInterval(timeTimer);
   timeTimer = null;
   if (view) {
-    win.contentView.removeChildView(view);
-    view.webContents.close();
+    if (!win.isDestroyed()) win.contentView.removeChildView(view);
+    if (!view.webContents.isDestroyed()) view.webContents.close();
     view = null;
   }
 }

@@ -127,35 +127,48 @@ try {
   }
 
   if (args.includes("--site")) {
-    // the fallbacks: catch the stream from the hidden page, then the site's own player
+    // 1) catching a stream from the page: a local stand-in for the player site whose page
+    //    requests a real HLS playlist, the way a balancer's player does
+    const http = await import("node:http");
+    const hlsUrl = "https://cache.libria.fun/videos/media/ts/9542/1/720/f2dc34029cefbeb93e9fbb4c5cfbfa5d.m3u8";
+    const server = http.createServer((req, res) => {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.end(req.url == "/player" ? `<video src="${hlsUrl}" autoplay muted></video>` : `<iframe src="/player" allowfullscreen></iframe>`);
+    }).listen(0, "127.0.0.1");
+    await new Promise(r => server.once("listening", r));
+    const local = `http://127.0.0.1:${server.address().port}`;
+    await page.evaluate(host => window.dpm.settings.set({ playerHost: host }), local);
     await page.evaluate(() => window.__dpmTestPlay?.(301));
-    await page.waitForSelector(".player .p-pill", { timeout: 90_000 }).catch(() => {});
+    await page.waitForSelector(".player[data-phase=playing]", { timeout: 90_000 });
     await page.mouse.move(600, 400);
     await page.locator(".p-pill", { hasText: "Источник" }).click();
     await page.locator(".p-option", { hasText: "Авто" }).click();
-    const started = Date.now();
-    let phase = "";
-    while (Date.now() - started < 60_000) {
+    let caught = false;
+    for (let i = 0; i < 30 && !caught; i++) {
       await page.waitForTimeout(2000);
-      phase = await page.locator(".player").getAttribute("data-phase");
-      const t = await page.evaluate(() => document.querySelector(".player-video")?.currentTime ?? 0);
-      if (phase == "playing" && t > 2) break;
-      if (phase == "error") break;
+      caught = await page.evaluate(() => document.querySelector(".player")?.dataset.phase == "playing" && (document.querySelector(".player-video")?.currentTime ?? 0) > 2);
     }
     const log = await page.evaluate(() => window.dpm.player.log());
-    check("hidden page: stream caught or reported", phase == "playing" || phase == "error", `${phase}; ${log.filter(l => /Найден поток|не появился|Ловим/.test(l)).slice(-2).join(" | ")}`);
+    check("stream caught from the page and played", caught, log.filter(l => /Найден поток|не появился/.test(l)).slice(-1).join(""));
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
+    server.close();
+
+    // 2) the site's own player, shown over the player area (real mirror)
+    await page.evaluate(() => window.dpm.settings.set({ playerHost: "https://fz7-16gs81j.troutcdn.site" }));
+    await page.evaluate(() => window.__dpmTestPlay?.(301));
+    await page.waitForSelector(".player[data-phase=playing]", { timeout: 90_000 });
     await page.mouse.move(600, 400);
-    await page.locator(".p-pill", { hasText: "Источник" }).click().catch(() => page.locator(".btn", { hasText: "Другой источник" }).click());
+    await page.locator(".p-pill", { hasText: "Источник" }).click();
     await page.locator(".p-option", { hasText: "Плеер сайта" }).click();
     await page.waitForTimeout(8000);
     const views = await app.evaluate(({ webContents }) => webContents.getAllWebContents().map(w => w.getURL()));
-    check("site player view opened", views.some(u => u.includes("troutcdn")), views.filter(u => u.startsWith("http")).join(", "));
-    await shot("12_player_site");
+    check("site player view opened", views.some(u => u.includes("troutcdn")), views.filter(u => u.startsWith("http")).join(", ").slice(0, 160));
+    check("site bar shown", (await page.locator(".player-site-bar").count()) == 1);
     await page.keyboard.press("Escape");
-    await page.keyboard.press("Escape");
-    await page.waitForTimeout(1000);
-    const after = await app.evaluate(({ webContents }) => webContents.getAllWebContents().map(w => w.getURL()));
-    check("site player closed with the player", !after.some(u => u.includes("troutcdn")));
+    await page.waitForTimeout(1500);
+    const after = await app.evaluate(({ webContents }) => webContents.getAllWebContents().filter(w => !w.isDestroyed()).map(w => w.getURL()));
+    check("site player closed with the player", !after.some(u => u.includes("troutcdn")), after.join(", ").slice(0, 160));
   }
 } catch (e) {
   check("no exceptions", false, String(e));

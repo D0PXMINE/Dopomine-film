@@ -144,6 +144,11 @@ function registerIpc() {
   });
 }
 
+// Electron answers an uncaught error in this process with a modal dialog that freezes the app;
+// a failed lookup or a closed page is never worth that: log it and carry on.
+process.on("uncaughtException", e => console.error("uncaught:", e));
+process.on("unhandledRejection", e => console.error("unhandled rejection:", e));
+
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
@@ -155,8 +160,17 @@ if (!app.requestSingleInstanceLock()) {
     if (id) win.webContents.send("app.openMovie", id);
   });
 
+  // macOS hands links over with an event rather than the command line
+  app.on("open-url", (e, url) => {
+    e.preventDefault();
+    const id = kpIdFrom([url]);
+    if (id) win?.webContents.send("app.openMovie", id);
+  });
+
   app.whenReady().then(() => {
     Menu.setApplicationMenu(null);
+    // dopomine://<Kinopoisk ID> links (the installer registers them too; the portable build cannot)
+    if (app.isPackaged) app.setAsDefaultProtocolClient("dopomine");
     protocol.handle("dpm", req => {
       const { pathname } = new URL(req.url);
       const file = path.join(rendererDir, decodeURIComponent(pathname));

@@ -6,7 +6,8 @@ Android-приложение для фильмов, сериалов и аним
 Geist и Geist Mono, узоры из точек.
 
 **Скачать APK:** [`release/Dopomine-2.2.0.apk`](release/Dopomine-2.2.0.apk) (Android 7.0+).
-Версия для компьютера (Windows, Linux, macOS) — [Dopomine-desktop](https://github.com/D0PXMINE/Dopomine-desktop).
+Версия для компьютера (Windows, Linux, macOS) — в папке [`desktop/`](desktop/README.md),
+установщики — в релизе [`desktop`](https://github.com/D0PXMINE/Dopomine-film/releases/tag/desktop).
 Ставится поверх прежних версий — избранное и история сохранятся.
 
 ## Плеер: откуда берётся видео
