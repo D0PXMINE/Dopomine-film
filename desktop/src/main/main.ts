@@ -168,7 +168,8 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(() => {
-    Menu.setApplicationMenu(null);
+    // macOS needs the standard menus for Cmd+C/V in text fields and Cmd+Q; elsewhere no menu bar
+    Menu.setApplicationMenu(process.platform == "darwin" ? Menu.buildFromTemplate([{ role: "appMenu" }, { role: "editMenu" }, { role: "windowMenu" }]) : null);
     // dopomine://<Kinopoisk ID> links (the installer registers them too; the portable build cannot)
     if (app.isPackaged) app.setAsDefaultProtocolClient("dopomine");
     protocol.handle("dpm", req => {
