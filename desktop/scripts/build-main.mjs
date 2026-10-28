@@ -21,7 +21,10 @@ const copies = [
   // the offline catalog: the same snapshot the Android app ships
   [path.join(android, "catalog", "catalog.db"), path.join(root, "resources", "catalog.db")],
 ];
-for (const [from, to] of copies) fs.copyFileSync(from, to);
+for (const [from, to] of copies) {
+  fs.mkdirSync(path.dirname(to), { recursive: true });
+  fs.copyFileSync(from, to);
+}
 
 const options = {
   entryPoints: { main: path.join(root, "src/main/main.ts"), preload: path.join(root, "src/preload/preload.ts") },
