@@ -201,6 +201,16 @@ def legacy_png(px, round_icon):
     return img.resize((px, px), Image.LANCZOS)
 
 
+def desktop_icon():
+    """1024px icon for the desktop app (electron-builder makes .ico / .icns from it)."""
+    out = os.path.join(os.path.dirname(__file__), "..", "desktop", "build", "icon.png")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    legacy_png(1024, False).save(out, optimize=True)
+    # Windows: the exe, the installer and the shortcuts
+    sizes = [16, 24, 32, 48, 64, 128, 256]
+    legacy_png(256, False).save(os.path.join(os.path.dirname(out), "icon.ico"), sizes=[(n, n) for n in sizes])
+
+
 def pngs():
     sizes = {"mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144, "xxxhdpi": 192}
     for density, px in sizes.items():
@@ -213,4 +223,5 @@ def pngs():
 if __name__ == "__main__":
     vectors()
     pngs()
+    desktop_icon()
     print("icons generated")

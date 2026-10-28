@@ -1,0 +1,51 @@
+appId: com.dopomine.desktop
+productName: Dopomine
+copyright: Created by dopamine
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**/*
+  - package.json
+extraResources:
+  - from: resources/catalog.db
+    to: catalog/catalog.db
+asar: true
+# installers are built by CI and attached to a GitHub release; no auto-update feed
+publish: null
+afterPack: scripts/after-pack.cjs
+protocols:
+  - name: Dopomine
+    schemes: [dopomine]
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+  icon: build/icon.ico
+  # editing the exe needs Wine off Windows; scripts/after-pack.mjs sets the icon and version instead
+  signAndEditExecutable: false
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: Dopomine
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  artifactName: Dopomine-Setup-${version}.${ext}
+portable:
+  artifactName: Dopomine-${version}-portable.${ext}
+linux:
+  target: [AppImage, deb]
+  syncDesktopName: true
+  category: AudioVideo
+  icon: build/icon.png
+  maintainer: dopamine
+  artifactName: Dopomine-${version}.${ext}
+mac:
+  target: dmg
+  category: public.app-category.entertainment
+  icon: build/icon.png
+  artifactName: Dopomine-${version}.${ext}
