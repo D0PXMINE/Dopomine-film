@@ -5,10 +5,12 @@ Android-приложение для фильмов, сериалов и аним
 Дизайн — как у [splicer](https://github.com/D0PXMINE/splicer): монохром, светлая и тёмная тема,
 Geist и Geist Mono, узоры из точек.
 
-**Скачать APK:** [`release/Dopomine-2.2.0.apk`](release/Dopomine-2.2.0.apk) (Android 7.0+).
+**Скачать APK:** [`release/Dopomine-2.2.1.apk`](release/Dopomine-2.2.1.apk) (Android 7.0+).
 Версия для компьютера (Windows, Linux, macOS) — в папке [`desktop/`](desktop/README.md),
 установщики — в релизе [`desktop`](https://github.com/D0PXMINE/Dopomine-film/releases/tag/desktop).
-Ставится поверх прежних версий — избранное и история сохранятся.
+
+С версии 2.2.1 APK подписан новым ключом автора. Если стоит 2.2.0 или старше, удалите приложение
+перед установкой (избранное и история при этом сотрутся); дальше новые версии ставятся поверх.
 
 ## Плеер: откуда берётся видео
 
@@ -98,9 +100,11 @@ python3 tools/gen_icons.py                                                      
 
 GitHub Actions собирает APK на каждый push (артефакт `Dopomine-apk`).
 
-Подпись: если рядом лежит `keystore.properties` (`storeFile`, `storePassword`, `keyAlias`,
-`keyPassword`), release подписывается вашим ключом; иначе — ключом `app/debug.keystore`
-из репозитория, чтобы любые сборки ставились поверх друг друга.
+Подпись: ключ автора в репозиторий не кладётся. Локально release подписывается ключом из
+`keystore.properties` в корне проекта (`storeFile`, `storePassword`, `keyAlias`, `keyPassword`),
+в GitHub Actions — из секретов `SIGNING_KEYSTORE` (файл ключа в base64) и `SIGNING_PASSWORD`.
+Без ключа release подписывается отладочным ключом этой машины: такой APK ставится, но не поверх
+официального.
 
 ## Устройство
 

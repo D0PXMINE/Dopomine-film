@@ -9,12 +9,17 @@ plugins {
     alias(libs.plugins.roborazzi)
 }
 
-// Release signing: keystore.properties (storeFile, storePassword, keyAlias, keyPassword)
-// falls back to the bundled debug keystore so every build can be installed over the previous one.
+// Release signing with the owner's key, which never goes into the repository: keystore.properties
+// (storeFile, storePassword, keyAlias, keyPassword) next to this project, or on CI the
+// DOPOMINE_KEYSTORE / DOPOMINE_KEYSTORE_PASSWORD variables. Without a key the release build is signed
+// with this machine's debug key: it installs, but not over the official APK.
 val keystoreProps = Properties().apply {
     val file = rootProject.file("keystore.properties")
     if (file.exists()) file.inputStream().use { load(it) }
 }
+fun signingValue(property: String, env: String): String? =
+    keystoreProps.getProperty(property) ?: System.getenv(env)?.takeIf { it.isNotBlank() }
+val releaseKeystore = signingValue("storeFile", "DOPOMINE_KEYSTORE")
 
 android {
     namespace = "com.dopomine.film"
@@ -24,31 +29,20 @@ android {
         applicationId = "com.dopomine.film"
         minSdk = 24
         targetSdk = 35
-        versionCode = 4
-        versionName = "2.2.0"
+        versionCode = 5
+        versionName = "2.2.1"
 
         buildConfigField("String", "DEFAULT_PLAYER_HOST", "\"https://fz7-16gs81j.troutcdn.site\"")
         buildConfigField("String", "CATALOG_UPDATE_URL", "\"https://github.com/D0PXMINE/Dopomine-film/releases/download/catalog/catalog.db.gz\"")
     }
 
     signingConfigs {
-        getByName("debug") {
-            storeFile = file("debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
-        }
-        create("release") {
-            if (keystoreProps.containsKey("storeFile")) {
-                storeFile = rootProject.file(keystoreProps.getProperty("storeFile"))
-                storePassword = keystoreProps.getProperty("storePassword")
-                keyAlias = keystoreProps.getProperty("keyAlias")
-                keyPassword = keystoreProps.getProperty("keyPassword")
-            } else {
-                storeFile = file("debug.keystore")
-                storePassword = "android"
-                keyAlias = "androiddebugkey"
-                keyPassword = "android"
+        if (releaseKeystore != null) {
+            create("release") {
+                storeFile = rootProject.file(releaseKeystore)
+                storePassword = signingValue("storePassword", "DOPOMINE_KEYSTORE_PASSWORD")
+                keyAlias = signingValue("keyAlias", "DOPOMINE_KEY_ALIAS") ?: "dopomine"
+                keyPassword = signingValue("keyPassword", "DOPOMINE_KEY_PASSWORD") ?: storePassword
             }
         }
     }
@@ -61,7 +55,7 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
