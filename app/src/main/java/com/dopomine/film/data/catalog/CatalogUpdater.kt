@@ -54,6 +54,11 @@ class CatalogUpdater(
                 tmp.delete()
                 return@withContext Result.UpToDate
             }
+            val share = db.ratedShare(tmp)
+            if (share < MIN_RATED_SHARE) {
+                tmp.delete()
+                return@withContext Result.Failed("Новый каталог неполный (рейтинги у ${(share * 100).toInt()}% известных тайтлов) — оставлен текущий")
+            }
             tmp.renameTo(db.pendingFile)
             Result.Staged(newVersion)
         } catch (e: UpdateUnavailable) {
@@ -75,4 +80,9 @@ class CatalogUpdater(
     private fun versionUrl() = BuildConfig.CATALOG_UPDATE_URL.substringBeforeLast('/') + "/version.txt"
 
     private class UpdateUnavailable(val code: Int) : Exception()
+
+    private companion object {
+        /** A snapshot that lost the ratings of more of the best-known titles is not installed. */
+        const val MIN_RATED_SHARE = 0.98
+    }
 }

@@ -310,6 +310,23 @@ class ScreenshotTest {
     @OptIn(ExperimentalRoborazziApi::class)
     @Test
     @Config(qualifiers = "w880dp-h400dp-xxhdpi")
+    fun playerPageWhileCatching() {
+        val session = PlayerSession().apply {
+            title = "Матрица"
+            subtitle = "Turbo"
+            mode = Mode.WEB
+            controlsVisible = true
+            sniffHint = "Если видео не запускается само, нажмите ▶ в плеере — приложение подхватит поток"
+        }
+        compose.setContent { DopomineTheme(ThemeMode.DARK) { PlayerScreen(session, NativeState(), NoControls, gesturesEnabled = true) } }
+        compose.mainClock.autoAdvance = false
+        compose.mainClock.advanceTimeBy(500)
+        captureScreenRoboImage("$out/17_player_page_catching.png")
+    }
+
+    @OptIn(ExperimentalRoborazziApi::class)
+    @Test
+    @Config(qualifiers = "w880dp-h400dp-xxhdpi")
     fun playerAnimeSources() {
         val session = playerSession().apply {
             title = "Провожающая в последний путь Фрирен"
@@ -317,8 +334,8 @@ class ScreenshotTest {
             choices = listOf(
                 SourceChoice(SourceChoice.ANILIBERTY, "AniLiberty", "Аниме · озвучка AniLibria, до 1080p, все сезоны", null),
                 SourceChoice(SourceChoice.ANIMEVOST, "AnimeVost", "Аниме · озвучка AnimeVost, 720p", null),
-                SourceChoice(SourceChoice.VEOVEO, "VeoVeo", "Прямой поток · озвучки, субтитры, качество и серии в приложении", null),
-                SourceChoice(SourceChoice.COLLAPS, "Collaps", "Прямой поток · озвучки, качество и серии в приложении", null),
+                SourceChoice(SourceChoice.COLLAPS, "Collaps", "Прямой поток до 1080p · озвучки, субтитры и серии в приложении", null),
+                SourceChoice("src:Turbo", "Turbo", "Поток со страницы плеера · Дубляж · 1080p", null),
                 SourceChoice(SourceChoice.SITE_PLAYER, "Плеер сайта", "Страница сайта без рекламы, без нативных функций", null),
             )
             currentChoice = SourceChoice.ANILIBERTY

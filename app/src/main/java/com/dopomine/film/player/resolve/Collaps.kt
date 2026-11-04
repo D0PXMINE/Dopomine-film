@@ -16,7 +16,8 @@ import okhttp3.OkHttpClient
  * Collaps is one of the players behind the site. Its embed page carries the stream config in
  * plain sight (HLS/DASH links, voice-over names, subtitles, seasons), which is exactly what the
  * site's actualize.js fetches and writes into its iframe. We read the same page and play the
- * stream natively.
+ * stream natively. Its HLS stops at 720p; the DASH manifest of the same video goes up to 1080p,
+ * so DASH is played first and HLS is kept as the fallback.
  */
 class CollapsResolver(private val http: OkHttpClient) {
 
@@ -98,25 +99,28 @@ object CollapsParser {
             if (seasons.isNotEmpty()) return Playable.Series("Collaps", seasons)
         }
         val config = html.substringAfter("makePlayer({", html)
-        val hls = stringValue(config, "hls")
-        val dash = stringValue(config, "dash") ?: stringValue(config, "dasha")
-        val url = hls ?: dash
-        if (url == null) {
+        val stream = stream(
+            hls = stringValue(config, "hls"),
+            dash = stringValue(config, "dasha") ?: stringValue(config, "dash"),
+            headers = headers,
+            audioNames = audioNames(config),
+            subtitles = subtitles(config),
+        )
+        if (stream == null) {
             if ("недоступно" in html || "unavailable" in html.lowercase()) {
                 throw ResolveException("Collaps: видео недоступно в этом регионе")
             }
             throw ResolveException("Collaps: ссылка на видео не найдена")
         }
-        return Playable.Single(
-            "Collaps",
-            Stream(
-                url = absolute(url),
-                format = if (hls != null) StreamFormat.HLS else StreamFormat.DASH,
-                headers = headers,
-                audioNames = audioNames(config),
-                subtitles = subtitles(config),
-            ),
-        )
+        return Playable.Single("Collaps", stream)
+    }
+
+    /** DASH (up to 1080p) with HLS (up to 720p) behind it; either alone if only one is given. */
+    private fun stream(hls: String?, dash: String?, headers: Map<String, String>, audioNames: List<String>, subtitles: List<Subtitle>): Stream? {
+        fun make(link: String, format: StreamFormat) = Stream(absolute(link), format, headers, audioNames, subtitles)
+        val viaHls = hls?.let { make(it, StreamFormat.HLS) }
+        val viaDash = dash?.let { make(it, StreamFormat.DASH) } ?: return viaHls
+        return viaDash.copy(fallback = viaHls)
     }
 
     private fun parseSeasons(raw: String, headers: Map<String, String>): List<Season> {
@@ -126,21 +130,19 @@ object CollapsParser {
             val number = so.int("season") ?: (si + 1)
             val episodes = (so["episodes"] as? JsonArray).orEmpty().mapIndexedNotNull { ei, e ->
                 val eo = e as? JsonObject ?: return@mapIndexedNotNull null
-                val hls = eo.str("hls") ?: eo.str("file")
-                val dash = eo.str("dasha") ?: eo.str("dash")
-                val link = hls ?: dash ?: return@mapIndexedNotNull null
                 val audio = (eo["audio"] as? JsonObject)?.get("names") as? JsonArray
+                val stream = stream(
+                    hls = eo.str("hls") ?: eo.str("file"),
+                    dash = eo.str("dasha") ?: eo.str("dash"),
+                    headers = headers,
+                    audioNames = audio?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty(),
+                    subtitles = (eo["cc"] as? JsonArray)?.let(::subtitleList).orEmpty(),
+                ) ?: return@mapIndexedNotNull null
                 Episode(
                     season = number,
                     number = eo.int("episode") ?: eo.int("number") ?: (ei + 1),
                     title = eo.str("title") ?: eo.str("name"),
-                    stream = Stream(
-                        url = absolute(link),
-                        format = if (hls != null) StreamFormat.HLS else StreamFormat.DASH,
-                        headers = headers,
-                        audioNames = audio?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty(),
-                        subtitles = (eo["cc"] as? JsonArray)?.let(::subtitleList).orEmpty(),
-                    ),
+                    stream = stream,
                 )
             }.sortedBy { it.number }
             if (episodes.isEmpty()) null else Season(number, episodes)
@@ -213,12 +215,14 @@ object CollapsParser {
         val sb = StringBuilder(raw.length + 64)
         var i = 0
         var quote: Char? = null
+        // the last non-blank character written outside strings: a key can only follow '{' or ','
+        var last = ' '
         while (i < raw.length) {
             val c = raw[i]
             if (quote != null) {
                 when {
                     c == '\\' -> { sb.append(c); if (i + 1 < raw.length) sb.append(raw[i + 1]); i += 2; continue }
-                    c == quote -> { sb.append('"'); quote = null }
+                    c == quote -> { sb.append('"'); quote = null; last = '"' }
                     c == '"' -> sb.append("\\\"")
                     else -> sb.append(c)
                 }
@@ -227,16 +231,17 @@ object CollapsParser {
             }
             when {
                 c == '"' || c == '\'' -> { quote = c; sb.append('"') }
-                (c.isLetter() || c == '_') && (sb.trimEnd().lastOrNull() == '{' || sb.trimEnd().lastOrNull() == ',') -> {
+                (c.isLetter() || c == '_') && (last == '{' || last == ',') -> {
                     val start = i
                     while (i < raw.length && (raw[i].isLetterOrDigit() || raw[i] == '_')) i++
                     var j = i
                     while (j < raw.length && raw[j].isWhitespace()) j++
                     if (j < raw.length && raw[j] == ':') sb.append('"').append(raw, start, i).append('"')
                     else sb.append(raw, start, i)
+                    last = raw[i - 1]
                     continue
                 }
-                else -> sb.append(c)
+                else -> { sb.append(c); if (!c.isWhitespace()) last = c }
             }
             i++
         }

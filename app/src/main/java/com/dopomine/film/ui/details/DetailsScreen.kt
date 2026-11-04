@@ -43,8 +43,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dopomine.film.data.HistoryItem
+import com.dopomine.film.data.model.Description
 import com.dopomine.film.data.model.Movie
-import com.dopomine.film.data.model.MovieDetails
+import com.dopomine.film.data.model.People
 import com.dopomine.film.ui.common.ContentCard
 import com.dopomine.film.ui.common.Launchers
 import com.dopomine.film.ui.common.appViewModel
@@ -85,7 +86,9 @@ fun DetailsScreen(nav: Nav) {
             when {
                 movie != null -> Content(
                     movie = movie,
-                    details = state.details,
+                    description = state.description,
+                    descriptionDone = state.descriptionDone,
+                    people = state.people,
                     similar = state.similar,
                     isFavorite = isFavorite,
                     history = history,
@@ -104,7 +107,9 @@ fun DetailsScreen(nav: Nav) {
 @Composable
 private fun Content(
     movie: Movie,
-    details: MovieDetails?,
+    description: Description?,
+    descriptionDone: Boolean,
+    people: People,
     similar: List<Movie>?,
     isFavorite: Boolean,
     history: HistoryItem?,
@@ -165,10 +170,10 @@ private fun Content(
                 }
             }
         }
-        item("about") { About(details) }
+        item("about") { About(description, descriptionDone) }
         item("facts") { Facts(movie) }
-        val cast = details?.cast.orEmpty()
-        val directors = details?.directors.orEmpty()
+        val cast = people.cast
+        val directors = people.directors
         if (cast.isNotEmpty() || directors.isNotEmpty()) {
             item("people") {
                 Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
@@ -223,12 +228,12 @@ private fun Stat(value: String, label: String, votes: String?, modifier: Modifie
 }
 
 @Composable
-private fun About(details: MovieDetails?) {
+private fun About(description: Description?, done: Boolean) {
     var expanded by rememberSaveable { mutableStateOf(false) }
-    val text = details?.description
+    val text = description?.text
     Column(Modifier.padding(horizontal = 16.dp).animateContentSize()) {
         when {
-            details == null -> Text("Загружаем описание…", style = Type.mono, color = T.text3)
+            text == null && !done -> Text("Загружаем описание…", style = Type.mono, color = T.text3)
             text == null -> Unit
             else -> {
                 Text(
@@ -239,7 +244,7 @@ private fun About(details: MovieDetails?) {
                 if (!expanded && text.length > 300) {
                     Text("читать полностью", style = Type.button, color = T.text2, modifier = Modifier.padding(top = 6.dp).clickable { expanded = true })
                 }
-                Text("по материалам Википедии", style = Type.monoSmall, color = T.text3, modifier = Modifier.padding(top = 6.dp))
+                Text("по материалам ${description?.source ?: "Википедии"}", style = Type.monoSmall, color = T.text3, modifier = Modifier.padding(top = 6.dp))
             }
         }
     }

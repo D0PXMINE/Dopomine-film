@@ -2,12 +2,10 @@ package com.dopomine.film.data.catalog
 
 import android.util.LruCache
 import com.dopomine.film.data.appCall
+import com.dopomine.film.data.model.Description
 import com.dopomine.film.data.model.Movie
-import com.dopomine.film.data.model.MovieDetails
 import com.dopomine.film.data.model.PagedMovies
-import com.dopomine.film.data.model.Ratings
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
+import com.dopomine.film.data.model.People
 
 /** Everything about titles: offline catalog first, a few keyless web sources for the rest. */
 class CatalogRepository(
@@ -15,8 +13,10 @@ class CatalogRepository(
     private val ratings: RatingsClient,
     private val wiki: WikiClient,
     private val wikidata: WikidataClient,
+    private val shikimori: ShikimoriClient,
 ) {
-    private val details = LruCache<Int, MovieDetails>(64)
+    private val descriptions = LruCache<Int, Description>(128)
+    private val people = LruCache<Int, People>(128)
     private val pageSize = 30
 
     suspend fun page(query: CatalogQuery, page: Int = 1, size: Int = pageSize): PagedMovies = appCall {
@@ -52,31 +52,43 @@ class CatalogRepository(
         db.byId(id) ?: wikidata.byKinopoiskId(id) ?: Movie(id = id, title = "Кинопоиск #$id")
     }
 
-    fun cachedDetails(id: Int): MovieDetails? = details.get(id)
+    fun cachedDescription(id: Int): Description? = descriptions.get(id)
+    fun cachedPeople(id: Int): People? = people.get(id)
 
-    suspend fun details(id: Int): MovieDetails = appCall {
-        details.get(id)?.let { return@appCall it }
-        coroutineScope {
-            val base = movie(id)
-            val fresh = async { ratings.get(id) }
-            val people = async { runCatching { wikidata.people(id) }.getOrNull() }
-            val text = async {
-                val article = base.wiki ?: if (base.title.startsWith("Кинопоиск #")) null else wikidata.byKinopoiskId(id)?.wiki
-                article?.let { wiki.summary(it) }
-            }
-            val r = fresh.await()
-            val movie = if (r != null) {
-                base.copy(
-                    ratingKp = r.kp ?: base.ratingKp, votesKp = maxOf(r.kpVotes, base.votesKp),
-                    ratingImdb = r.imdb ?: base.ratingImdb, votesImdb = maxOf(r.imdbVotes, base.votesImdb),
-                )
-            } else base
-            val (directors, cast) = people.await() ?: (emptyList<String>() to emptyList())
-            MovieDetails(movie, text.await(), directors, cast).also { details.put(id, it) }
-        }
+    /**
+     * A description in Russian: Shikimori's synopsis for anime, else the lead of the Wikipedia
+     * article. Only found descriptions are remembered, so a refused request is retried next time.
+     */
+    suspend fun description(movie: Movie): Description? {
+        descriptions.get(movie.id)?.let { return it }
+        val article = movie.wiki ?: if (isStub(movie)) null else onlineArticle(movie.id)
+        val found = movie.malId?.let { mal -> shikimori.description(mal)?.let { Description(it, "Shikimori") } }
+            ?: article?.let { wiki.summary(it)?.let { text -> Description(text, "Википедии") } }
+        if (found != null) descriptions.put(movie.id, found)
+        return found
     }
 
-    suspend fun ratings(id: Int): Ratings? = ratings.get(id)
+    /** Directors and cast from Wikidata. */
+    suspend fun people(id: Int): People {
+        people.get(id)?.let { return it }
+        val (directors, cast) = runCatching { wikidata.people(id) }.getOrNull() ?: return People()
+        return People(directors, cast).also { if (directors.isNotEmpty() || cast.isNotEmpty()) people.put(id, it) }
+    }
+
+    /** The title with fresh Kinopoisk and IMDb ratings, when they could be fetched. */
+    suspend fun withFreshRatings(movie: Movie): Movie {
+        val r = ratings.get(movie.id) ?: return movie
+        return movie.copy(
+            ratingKp = r.kp ?: movie.ratingKp, votesKp = maxOf(r.kpVotes, movie.votesKp),
+            ratingImdb = r.imdb ?: movie.ratingImdb, votesImdb = maxOf(r.imdbVotes, movie.votesImdb),
+        )
+    }
+
+    /** The catalog already says when a title has no article; only titles it lacks are looked up. */
+    private suspend fun onlineArticle(id: Int): String? =
+        if (db.byId(id) != null) null else runCatching { wikidata.byKinopoiskId(id)?.wiki }.getOrNull()
+
+    private fun isStub(movie: Movie) = movie.title.startsWith("Кинопоиск #")
 
     /** Same kind, overlapping genres, ordered by popularity. */
     suspend fun similar(movie: Movie, limit: Int = 20): List<Movie> = appCall {

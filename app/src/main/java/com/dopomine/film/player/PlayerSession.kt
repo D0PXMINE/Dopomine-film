@@ -26,7 +26,6 @@ data class SourceChoice(
 ) {
     companion object {
         const val COLLAPS = "collaps"
-        const val VEOVEO = "veoveo"
         const val ANILIBERTY = "aniliberty"
         const val ANIMEVOST = "animevost"
         const val SITE = "site"
@@ -44,6 +43,8 @@ class PlayerSession {
     var subtitle by mutableStateOf<String?>(null)
     var mode by mutableStateOf(Mode.RESOLVING)
     var status by mutableStateOf("Ищем видео…")
+    /** Shown over a player page while the app still waits for its stream. */
+    var sniffHint by mutableStateOf<String?>(null)
     var error by mutableStateOf<String?>(null)
     val log = mutableStateListOf<String>()
 

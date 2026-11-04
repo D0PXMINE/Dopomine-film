@@ -30,12 +30,30 @@ class CollapsParserTest {
             </script>
         """.trimIndent()
         val p = CollapsParser.parse(html, headers) as Playable.Single
-        assertEquals("https://cdn.example.ws/hls/abc/index.m3u8?token=xyz&t=1", p.stream.url)
-        assertEquals(StreamFormat.HLS, p.stream.format)
-        assertEquals(listOf("Рус. Дублированный", "Рус. Проф. многоголосый", "Eng.Original"), p.stream.audioNames)
-        assertEquals(2, p.stream.subtitles.size)
-        assertEquals("https://cdn.example.ws/sub/eng.vtt", p.stream.subtitles[1].url)
-        assertEquals(headers, p.stream.headers)
+        // DASH goes up to 1080p, HLS stops at 720p: DASH first, HLS behind it
+        assertEquals("https://cdn.example.ws/dash/abc/manifest.mpd?token=xyz", p.stream.url)
+        assertEquals(StreamFormat.DASH, p.stream.format)
+        val hls = p.stream.fallback!!
+        assertEquals("https://cdn.example.ws/hls/abc/index.m3u8?token=xyz&t=1", hls.url)
+        assertEquals(StreamFormat.HLS, hls.format)
+        for (s in listOf(p.stream, hls)) {
+            assertEquals(listOf("Рус. Дублированный", "Рус. Проф. многоголосый", "Eng.Original"), s.audioNames)
+            assertEquals(2, s.subtitles.size)
+            assertEquals("https://cdn.example.ws/sub/eng.vtt", s.subtitles[1].url)
+            assertEquals(headers, s.headers)
+        }
+    }
+
+    @Test
+    fun dashaIsPreferredAndHlsAloneStaysHls() {
+        val both = """makePlayer({ source: { hls: "https://c.ws/a.m3u8", dash: "https://c.ws/a.mpd", dasha: "https://c.ws/a2.mpd" } });"""
+        val p = CollapsParser.parse(both, headers) as Playable.Single
+        assertEquals("https://c.ws/a2.mpd", p.stream.url)
+        assertEquals("https://c.ws/a.m3u8", p.stream.fallback?.url)
+
+        val hlsOnly = CollapsParser.parse("""makePlayer({ source: { hls: "https://c.ws/b.m3u8" } });""", headers) as Playable.Single
+        assertEquals(StreamFormat.HLS, hlsOnly.stream.format)
+        assertEquals(null, hlsOnly.stream.fallback)
     }
 
     @Test
@@ -54,6 +72,16 @@ class CollapsParserTest {
         assertEquals("https://cdn.example.ws/s1e1.m3u8", p.seasons[0].episodes[0].stream.url)
         assertEquals(listOf("LostFilm", "NewStudio"), p.seasons[0].episodes[0].stream.audioNames)
         assertEquals(StreamFormat.DASH, p.seasons[1].episodes[0].stream.format)
+        assertEquals(null, p.seasons[1].episodes[0].stream.fallback)
+    }
+
+    @Test
+    fun seriesEpisodesGetDashWithHlsFallback() {
+        val html = """makePlayer({ seasons:[{"season":1,"episodes":[{"episode":"1","hls":"https://c.ws/e1.m3u8","dasha":"https://c.ws/e1.mpd","audio":{"names":["LostFilm","delete"]}}]}] });"""
+        val e = (CollapsParser.parse(html, headers) as Playable.Series).seasons.single().episodes.single()
+        assertEquals(StreamFormat.DASH, e.stream.format)
+        assertEquals("https://c.ws/e1.m3u8", e.stream.fallback?.url)
+        assertEquals(listOf("LostFilm", "delete"), e.stream.fallback?.audioNames)
     }
 
     @Test

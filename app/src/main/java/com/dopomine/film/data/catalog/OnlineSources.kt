@@ -4,6 +4,7 @@ import android.util.LruCache
 import com.dopomine.film.data.model.ContentType
 import com.dopomine.film.data.model.Movie
 import com.dopomine.film.data.model.Ratings
+import com.dopomine.film.data.net.HttpStatusException
 import com.dopomine.film.data.net.text
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -14,6 +15,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
+import java.io.IOException
 import java.net.URLEncoder
 
 private val json = Json { ignoreUnknownKeys = true; isLenient = true }
@@ -43,9 +45,76 @@ class RatingsClient(private val http: OkHttpClient) {
 class WikiClient(private val http: OkHttpClient) {
     suspend fun summary(article: String): String? {
         val path = URLEncoder.encode(article.replace(' ', '_'), "UTF-8").replace("+", "%20")
-        val text = runCatching { http.text("https://ru.wikipedia.org/api/rest_v1/page/summary/$path") }.getOrNull() ?: return null
-        val obj = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull() ?: return null
-        return obj["extract"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.length > 40 }
+        val text = try {
+            http.text("https://ru.wikipedia.org/api/rest_v1/page/summary/$path")
+        } catch (e: HttpStatusException) {
+            // over the rate limit the Action API answers no better; anything else is worth a second door
+            return if (e.code == 429) null else extract(article)
+        } catch (e: IOException) {
+            return null
+        }
+        val obj = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull() ?: return extract(article)
+        return obj["extract"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.length > 40 } ?: extract(article)
+    }
+
+    /** The same lead through the Action API (`prop=extracts`). */
+    private suspend fun extract(article: String): String? {
+        val url = "https://ru.wikipedia.org/w/api.php".toHttpUrl().newBuilder()
+            .addQueryParameter("action", "query")
+            .addQueryParameter("format", "json")
+            .addQueryParameter("formatversion", "2")
+            .addQueryParameter("prop", "extracts")
+            .addQueryParameter("exintro", "1")
+            .addQueryParameter("explaintext", "1")
+            .addQueryParameter("redirects", "1")
+            .addQueryParameter("titles", article)
+            .build().toString()
+        val text = runCatching { http.text(url) }.getOrNull() ?: return null
+        val page = runCatching {
+            json.parseToJsonElement(text).jsonObject["query"]!!.jsonObject["pages"]!!.jsonArray.first().jsonObject
+        }.getOrNull() ?: return null
+        return page["extract"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.length > 40 }
+    }
+}
+
+/** Shikimori: Russian synopses of anime, by MyAnimeList ID (the site moved from .one to .io). */
+class ShikimoriClient(private val http: OkHttpClient) {
+    suspend fun description(malId: Int): String? {
+        for (host in HOSTS) {
+            val text = try {
+                http.text("https://$host/api/animes/$malId", mapOf("Accept" to "application/json"))
+            } catch (e: HttpStatusException) {
+                if (e.code == 404) return null else continue
+            } catch (e: IOException) {
+                continue
+            }
+            val raw = runCatching { json.parseToJsonElement(text).jsonObject["description"]?.jsonPrimitive?.contentOrNull }.getOrNull()
+            return raw?.let(::clean)
+        }
+        return null
+    }
+
+    companion object {
+        private val HOSTS = listOf("shikimori.io", "shikimori.one")
+        private val TAG_WITH_BODY = Regex("""\[(\w+)=[^\]\n]*](.*?)\[/\1]""", RegexOption.DOT_MATCHES_ALL)
+        private val WIKI_LINK = Regex("""\[\[(?:[^\]|\n]*\|)?([^\]\n]*)]]""")
+        /** Japanese spellings after names: "Рюк [リューク]". */
+        private val ORIGINAL_NAME = Regex("""\s*\[[^\]\n]*[\u3040-\u30ff\u3400-\u9fff][^\]\n]*]""")
+        private val BARE_TAG = Regex("""\[/?[a-z_]+(?:=[^\]\n]*)?]""")
+
+        /** Shikimori's markup ("[character=1]Имя[/character]", "[[Имя]]") to plain text. */
+        fun clean(raw: String): String? {
+            var text = raw
+            repeat(3) { text = TAG_WITH_BODY.replace(text) { it.groupValues[2] } }
+            return text
+                .replace(WIKI_LINK) { it.groupValues[1] }
+                .replace(ORIGINAL_NAME, "")
+                .replace(BARE_TAG, "")
+                .replace(Regex("""[ \t]+"""), " ")
+                .replace(Regex("""\s*\n\s*"""), "\n")
+                .trim()
+                .takeIf { it.length > 40 }
+        }
     }
 }
 

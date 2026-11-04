@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Movie, Playable, ResolveResult, Segment, Stream } from "../../shared/types";
+import type { Movie, Playable, ResolveResult, Segment, SitePage, Stream } from "../../shared/types";
 import { isSeries, SOURCE } from "../../shared/types";
 import { inSegment, merge, SEGMENT_TITLE, SKIP_LABEL, segmentEnd } from "../../shared/segments";
 import { Halftone } from "../halftone/Halftone";
@@ -54,6 +54,12 @@ export default function Player({ movie: input }: { movie: Movie }) {
   const [introMark, setIntroMark] = useState<[number, number] | null>(null);
   const [markStart, setMarkStart] = useState<number | null>(null);
   const [sitePos, setSitePos] = useState<{ t: number; d: number } | null>(null);
+  /** The page over the player area in "site" phase (the site itself, or one player's page). */
+  const [sitePage, setSitePage] = useState<SitePage>({ embedUrl: null, name: "Плеер сайта", catching: false });
+  /** The page a caught stream came from: it plays the video itself if the app cannot. */
+  const caughtFrom = useRef<SitePage | null>(null);
+  /** The other form of the current item was already tried (Collaps: HLS after DASH). */
+  const fellBack = useRef(false);
   const done = useRef(new Set<Segment>());
   const countdownTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const segmentsFor = useRef<string | null>(null);
@@ -97,6 +103,7 @@ export default function Player({ movie: input }: { movie: Movie }) {
     setPhase("playing");
     setError(null);
     setItem(next);
+    fellBack.current = false;
     let stream: Stream;
     try {
       stream = await api.player.prepare(next.stream);
@@ -122,11 +129,18 @@ export default function Player({ movie: input }: { movie: Movie }) {
     void playItem({ stream: ep.stream, key: `s${seasonNo}e${episodeNo}`, season: seasonNo, episode: episodeNo, source: p.sourceName });
   }, [playItem]);
 
+  const showPage = useCallback((page: SitePage) => {
+    engine.current?.destroy();
+    setSitePage(page);
+    setPhase("site");
+  }, []);
+
   const start = useCallback(async (r: ResolveResult) => {
     setResult(r);
     setMovie(r.movie);
     if (!r.playable) {
-      if (r.choice == SOURCE.SITE_PLAYER) setPhase("site");
+      if (r.page) showPage(r.page);
+      else if (r.choice == SOURCE.SITE_PLAYER) showPage({ embedUrl: null, name: "Плеер сайта", catching: false });
       else {
         setError(r.error ?? "Видео не найдено");
         setPhase("error");
@@ -137,9 +151,11 @@ export default function Player({ movie: input }: { movie: Movie }) {
     if (p.kind == "single") {
       // a caught stream has no stable address; it is recognised by its duration instead
       const caught = r.choice == SOURCE.SITE || (r.choice ?? "").startsWith("src:");
+      caughtFrom.current = caught ? { ...(r.page ?? { embedUrl: null, name: p.sourceName }), catching: false } : null;
       void playItem({ stream: p.stream, key: caught ? null : "movie", season: null, episode: null, source: p.sourceName });
       return;
     }
+    caughtFrom.current = null;
     const last = await api.library.lastEpisode(r.movie.id);
     const season = p.seasons.find(s => s.number == last?.[0]) ?? p.seasons.find(s => s.number == p.startSeason) ?? p.seasons[0];
     const ep = season.episodes.find(e => e.number == last?.[1]) ?? season.episodes[0];
@@ -150,9 +166,8 @@ export default function Player({ movie: input }: { movie: Movie }) {
     setPanel(null);
     saveProgress();
     if (key == SOURCE.SITE_PLAYER) {
-      engine.current?.destroy();
       setResult(r => (r ? { ...r, choice: key, playable: null } : r));
-      setPhase("site");
+      showPage({ embedUrl: null, name: "Плеер сайта", catching: false });
       return;
     }
     engine.current?.destroy();
@@ -179,8 +194,18 @@ export default function Player({ movie: input }: { movie: Movie }) {
       }
     }
     setResult({ ...r, choice: SOURCE.SITE_PLAYER, playable: null });
-    setPhase("site");
-  }, [start]);
+    showPage({ embedUrl: null, name: "Плеер сайта", catching: false });
+  }, [start, showPage]);
+
+  /** The source menu; the site's list of players may have come in after playback started. */
+  const openSources = useCallback(() => {
+    if (panelRef.current == "sources") {
+      setPanel(null);
+      return;
+    }
+    setPanel("sources");
+    void api.player.choices(ctx.current.movie).then(choices => setResult(r => (r ? { ...r, choices } : r))).catch(() => {});
+  }, []);
 
   // ---- setup -------------------------------------------------------------------------------------
 
@@ -190,6 +215,20 @@ export default function Player({ movie: input }: { movie: Movie }) {
     e.onChange = rerender;
     e.onError = err => {
       void api.player.log().then(setLog);
+      const current = e.current;
+      const other = ctx.current.item?.stream.fallback;
+      // the same video in its other form (Collaps: HLS behind DASH) before another source
+      if (other && !fellBack.current && current?.format != other.format) {
+        fellBack.current = true;
+        const at = videoRef.current?.currentTime ?? 0;
+        void api.player.prepare(other).then(s => e.load(s, at));
+        return;
+      }
+      // a caught stream that does not play here: the page it came from plays it itself
+      if (caughtFrom.current) {
+        showPage(caughtFrom.current);
+        return;
+      }
       void fallback(err.message);
     };
     let alive = true;
@@ -429,7 +468,7 @@ export default function Player({ movie: input }: { movie: Movie }) {
       const r = el.getBoundingClientRect();
       return { x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) };
     };
-    void api.player.showSite(movie, bounds());
+    void api.player.showSite(movie, bounds(), sitePage);
     const ro = new ResizeObserver(() => void api.player.siteBounds(bounds()));
     ro.observe(el);
     return () => {
@@ -437,7 +476,18 @@ export default function Player({ movie: input }: { movie: Movie }) {
       void api.player.hideSite();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase]);
+  }, [phase, sitePage]);
+
+  // the page's stream, caught once the viewer pressed play there: the app's player takes over
+  useEffect(() => api.player.onCaught((stream, name) => {
+    if (phaseRef.current != "site") return;
+    const page = { ...sitePageRef.current, catching: false };
+    caughtFrom.current = page;
+    setResult(r => (r ? { ...r, playable: { kind: "single", sourceName: name, stream } } : r));
+    void playItem({ stream, key: null, season: null, episode: null, source: name });
+  }), [playItem]);
+  const sitePageRef = useRef(sitePage);
+  sitePageRef.current = sitePage;
 
   // panels that would sit under the site's native view hide it while open
   useEffect(() => {
@@ -603,7 +653,7 @@ export default function Player({ movie: input }: { movie: Movie }) {
           <div className="player-state-title">Не удалось запустить видео</div>
           <div className="mono player-state-status">{error}</div>
           <div className="player-state-actions">
-            <button type="button" className="btn primary" onClick={() => setPanel("sources")}><Icon name="settings-2" size={14} /> Другой источник</button>
+            <button type="button" className="btn primary" onClick={openSources}><Icon name="settings-2" size={14} /> Другой источник</button>
             <button type="button" className="btn" onClick={() => void choose(SOURCE.SITE_PLAYER)}><Icon name="monitor-play" size={14} /> Плеер сайта</button>
             <button type="button" className="btn" onClick={() => setPanel("log")}><Icon name="scroll-text" size={14} /> Журнал</button>
           </div>
@@ -618,10 +668,10 @@ export default function Player({ movie: input }: { movie: Movie }) {
         <button type="button" className="p-icon" title="Закрыть (Esc)" onClick={close}><Icon name="arrow-left" size={20} /></button>
         <div className="player-titles">
           <div className="player-title truncate">{movie.title}</div>
-          <div className="mono player-subtitle truncate">{phase == "site" ? "Плеер сайта" : subtitle ?? " "}</div>
+          <div className="mono player-subtitle truncate">{phase == "site" ? sitePage.name : subtitle ?? " "}</div>
         </div>
         {series && <PillBtn icon="list-video" label="Серии" on={panel == "episodes"} onClick={() => setPanel(panel == "episodes" ? null : "episodes")} />}
-        {result && <PillBtn icon="settings-2" label="Источник" on={panel == "sources"} onClick={() => setPanel(panel == "sources" ? null : "sources")} />}
+        {result && <PillBtn icon="settings-2" label="Источник" on={panel == "sources"} onClick={openSources} />}
         <button type="button" className="p-icon" title="Журнал" onClick={() => setPanel(panel == "log" ? null : "log")}><Icon name="scroll-text" size={18} /></button>
         {phase == "playing" && <button type="button" className="p-icon" title="Картинка в картинке" onClick={() => void video().requestPictureInPicture().catch(() => {})}><Icon name="picture-in-picture-2" size={18} /></button>}
         <button type="button" className="p-icon" title="Во весь экран (F)" onClick={toggleFullscreen}><Icon name={fullscreen ? "minimize" : "maximize"} size={18} /></button>
@@ -654,7 +704,9 @@ export default function Player({ movie: input }: { movie: Movie }) {
 
       {phase == "site" && (
         <div className="player-site-bar">
-          <span className="mono muted">Плеер сайта: реклама и переходы на чужие сайты заблокированы</span>
+          {sitePage.catching
+            ? <span className="mono"><Spinner size={12} /> Если видео не запускается само, нажмите ▶ в плеере — приложение подхватит поток</span>
+            : <span className="mono muted">Плеер сайта: реклама и переходы на чужие сайты заблокированы</span>}
           <span className="spacer" />
           <PillBtn icon="fast-forward" label="Автопропуск" primary={autoSkip} onClick={toggleAutoSkip} />
           <PillBtn icon="timer" label="Заставка" on={panel == "skip"} onClick={() => setPanel(panel == "skip" ? null : "skip")} />
@@ -694,7 +746,7 @@ export default function Player({ movie: input }: { movie: Movie }) {
           <div className="player-panel-body scroll">
             {panel == "sources" && result && (
               <>
-                <p className="panel-note">AniLiberty, AnimeVost, VeoVeo и Collaps играют прямо в приложении; остальные — поток, пойманный со страницы плеера.</p>
+                <p className="panel-note">AniLiberty, AnimeVost и Collaps играют прямо в приложении; остальные — поток, пойманный со страницы плеера.</p>
                 {result.choices.map(c => <Option key={c.key} title={c.title} subtitle={c.subtitle} selected={c.key == result.choice} onClick={() => void choose(c.key)} />)}
               </>
             )}

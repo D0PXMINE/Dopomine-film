@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, Menu, nativeTheme, net, protocol, shell } from "electron";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { CatalogQuery, Movie, Settings, SkipRequest, Stream } from "../shared/types";
+import type { CatalogQuery, Movie, Settings, SitePage, SkipRequest, Stream } from "../shared/types";
 import * as catalog from "./catalog";
 import * as media from "./media";
 import * as player from "./player";
@@ -118,14 +118,24 @@ function registerIpc() {
 
   handle("player.resolve", (m: Movie) => player.resolve(m));
   handle("player.choose", (m: Movie, key: string) => player.choose(m, key));
-  handle("player.prepare", async (s: Stream) => media.prepare(await player.finalize(s)));
+  handle("player.prepare", (s: Stream) => media.prepare(s));
+  handle("player.choices", (m: Movie) => player.choicesOf(m));
   handle("player.segments", (r: SkipRequest) => fetchSegments(r, player.log));
   handle("player.log", () => player.logLines());
-  handle("player.showSite", async (m: Movie, bounds: Electron.Rectangle) => {
+  handle("player.showSite", async (m: Movie, bounds: Electron.Rectangle, page?: SitePage | null) => {
     if (!win) return;
     const s = store.settings();
-    const picker = await pickerHost(s.playerHost, m.id);
-    site.showSite(win, s.playerHost.replace(/\/+$/, ""), picker, m.id, s.adBlock, bounds, (t, d) => win?.webContents.send("player.siteTime", t, d));
+    const mirror = s.playerHost.replace(/\/+$/, "");
+    const picker = await pickerHost(mirror, m.id);
+    site.showSite(win, mirror, picker, m.id, s.adBlock, bounds, (t, d) => win?.webContents.send("player.siteTime", t, d), {
+      embedUrl: page?.embedUrl,
+      onStream: page?.catching
+        ? stream => {
+          player.log(`${page.name}: поток пойман — играет плеер приложения`);
+          win?.webContents.send("player.caught", stream, page.name);
+        }
+        : undefined,
+    });
   });
   handle("player.hideSite", () => win && site.hideSite(win));
   handle("player.siteBounds", (b: Electron.Rectangle) => site.siteBounds(b));

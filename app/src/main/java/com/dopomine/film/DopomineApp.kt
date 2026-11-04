@@ -15,6 +15,7 @@ import com.dopomine.film.data.catalog.CatalogDb
 import com.dopomine.film.data.catalog.CatalogRepository
 import com.dopomine.film.data.catalog.CatalogUpdater
 import com.dopomine.film.data.catalog.RatingsClient
+import com.dopomine.film.data.catalog.ShikimoriClient
 import com.dopomine.film.data.catalog.WikiClient
 import com.dopomine.film.data.catalog.WikidataClient
 import com.dopomine.film.data.db.AppDatabase
@@ -25,7 +26,6 @@ import com.dopomine.film.player.resolve.CollapsResolver
 import com.dopomine.film.player.resolve.PlayerSite
 import com.dopomine.film.player.resolve.AniLibertyResolver
 import com.dopomine.film.player.resolve.AnimevostResolver
-import com.dopomine.film.player.resolve.VeoVeoResolver
 import com.dopomine.film.player.skip.SkipSegmentsProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -46,25 +46,32 @@ class AppContainer(context: Context, testInterceptor: Interceptor? = null) {
     /** Metadata requests (cached). */
     val httpClient: OkHttpClient = Http.client(context.cacheDir, testInterceptor)
 
-    /** Video playlists and segments: same connection pool, no disk cache to pollute. */
+    /** Video playlists and segments: same connection pool, no disk cache to pollute, no limit on long reads. */
     val mediaClient: OkHttpClient = httpClient.newBuilder()
         .cache(null)
         .apply { networkInterceptors().clear() }
         .readTimeout(30, TimeUnit.SECONDS)
+        .callTimeout(0, TimeUnit.SECONDS)
+        .build()
+
+    /** Player sources: they must answer quickly or be skipped, so the next source gets its turn. */
+    private val resolverClient: OkHttpClient = httpClient.newBuilder()
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(12, TimeUnit.SECONDS)
+        .callTimeout(20, TimeUnit.SECONDS)
         .build()
 
     val catalogDb = CatalogDb(context)
-    val catalog = CatalogRepository(catalogDb, RatingsClient(httpClient), WikiClient(httpClient), WikidataClient(httpClient))
+    val catalog = CatalogRepository(catalogDb, RatingsClient(httpClient), WikiClient(httpClient), WikidataClient(httpClient), ShikimoriClient(httpClient))
     val catalogUpdater = CatalogUpdater(catalogDb, mediaClient, settings)
     val database = AppDatabase.create(context)
     val library = LibraryRepository(database)
     val adBlocker = AdBlocker(context, appScope)
-    val playerSite = PlayerSite(httpClient)
-    val collaps = CollapsResolver(httpClient)
-    val veoveo = VeoVeoResolver(httpClient)
-    val aniliberty = AniLibertyResolver(httpClient)
-    val animevost = AnimevostResolver(httpClient)
-    val skipSegments = SkipSegmentsProvider(httpClient)
+    val playerSite = PlayerSite(resolverClient)
+    val collaps = CollapsResolver(resolverClient)
+    val aniliberty = AniLibertyResolver(resolverClient)
+    val animevost = AnimevostResolver(resolverClient)
+    val skipSegments = SkipSegmentsProvider(resolverClient)
 }
 
 class DopomineApp : Application(), SingletonImageLoader.Factory {

@@ -66,6 +66,22 @@ class CatalogDb(context: Context) {
         }
     }.getOrDefault(false)
 
+    /**
+     * Of the [n] most-voted titles in the current catalog, the share that still has ratings in
+     * [f]: a snapshot built while Kinopoisk throttled the builder loses them for big titles.
+     */
+    suspend fun ratedShare(f: File, n: Int = 1000): Double = withContext(Dispatchers.IO) {
+        val top = database().rawQuery("SELECT kp FROM titles ORDER BY kp_votes DESC LIMIT $n", null).use { c ->
+            buildList { while (c.moveToNext()) add(c.getInt(0)) }
+        }
+        if (top.isEmpty()) return@withContext 1.0
+        val rated = SQLiteDatabase.openDatabase(f.path, null, SQLiteDatabase.OPEN_READONLY).use { d ->
+            d.rawQuery("SELECT COUNT(*) FROM titles WHERE kp_votes > 0 AND kp IN (${top.joinToString(",")})", null)
+                .use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+        }
+        rated.toDouble() / top.size
+    }
+
     suspend fun version(): String? = withContext(Dispatchers.IO) {
         database().rawQuery("SELECT value FROM meta WHERE key = 'version'", null).use { c -> if (c.moveToFirst()) c.getString(0) else null }
     }

@@ -84,7 +84,7 @@ try {
       return t > 3;
     };
 
-    if (await playAndWait(301, "Матрица (VeoVeo)")) {
+    if (await playAndWait(301, "Матрица")) {
       await page.mouse.move(600, 400);
       await page.waitForTimeout(500);
       await shot("08_player");

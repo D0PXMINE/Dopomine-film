@@ -491,11 +491,36 @@ private fun WebChrome(session: PlayerSession, controls: PlayerControls) {
             }
         }
         SkipOverlay(session, controls, Modifier.align(Alignment.BottomEnd).padding(end = 24.dp, bottom = 72.dp))
+        session.sniffHint?.let { hint ->
+            // at the top: the page's own controls are at the bottom
+            if (!session.webFullscreen) SniffHint(hint, controls, Modifier.align(Alignment.TopCenter).padding(top = 56.dp))
+        }
         AnimatedVisibility(!session.controlsVisible && !session.webFullscreen, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.TopCenter)) {
             Box(Modifier.clip(RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp)).clickable { session.controlsVisible = true }.padding(horizontal = 18.dp, vertical = 6.dp)) {
                 Icon(Icons.Rounded.KeyboardArrowDown, "Показать меню", tint = Color(0x80FFFFFF), modifier = Modifier.size(22.dp))
             }
         }
+    }
+}
+
+/** While a player page is on screen and the app still waits for its stream; folds to a chip after a while. */
+@Composable
+private fun SniffHint(text: String, controls: PlayerControls, modifier: Modifier) {
+    var expanded by remember(text) { mutableStateOf(true) }
+    LaunchedEffect(text) { delay(8_000); expanded = false }
+    Row(
+        modifier.padding(horizontal = 16.dp).widthIn(max = 560.dp)
+            .clip(RoundedCornerShape(16.dp)).background(Color(0xE6121212))
+            .border(1.dp, White20, RoundedCornerShape(16.dp))
+            .clickable { expanded = !expanded }
+            .padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CircularProgressIndicator(Modifier.size(16.dp), color = White60, strokeWidth = 2.dp)
+        Spacer(Modifier.width(10.dp))
+        Text(if (expanded) text else "Ждём поток…", style = Type.monoSmall, color = White, modifier = Modifier.weight(1f, fill = false))
+        Spacer(Modifier.width(8.dp))
+        DarkPill("Источник", Icons.Rounded.Tune, small = true) { controls.openSheet(Sheet.SOURCES) }
     }
 }
 
@@ -552,7 +577,7 @@ private fun PlayerSheet(sheet: Sheet, session: PlayerSession, state: NativeState
         Column(Modifier.navigationBarsPadding().padding(bottom = 12.dp)) {
             when (sheet) {
                 Sheet.SOURCES -> {
-                    SheetTitle("Источник", "Откуда брать видео. AniLiberty, AnimeVost, VeoVeo и Collaps играют прямо в приложении; остальные — поток, пойманный со страницы плеера.")
+                    SheetTitle("Источник", "Откуда брать видео. AniLiberty, AnimeVost и Collaps играют прямо в приложении; остальные — поток, пойманный со страницы плеера.")
                     LazyColumn(Modifier.heightIn(max = 520.dp)) {
                         items(session.choices) { c ->
                             OptionRow(c.title, c.subtitle, c.key == session.currentChoice) { controls.chooseSource(c.key) }

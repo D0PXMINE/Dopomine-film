@@ -4,8 +4,10 @@ import com.dopomine.film.data.catalog.CatalogQuery
 import com.dopomine.film.data.catalog.CatalogRepository
 import com.dopomine.film.data.catalog.Genres
 import com.dopomine.film.data.catalog.Kind
+import com.dopomine.film.data.catalog.ShikimoriClient
 import com.dopomine.film.data.catalog.Sort
 import com.dopomine.film.data.settings.SettingsRepository
+import com.dopomine.film.player.resolve.SourceInfo
 import com.dopomine.film.player.resolve.Stream
 import com.dopomine.film.player.resolve.StreamFormat
 import com.dopomine.film.ui.common.KpLinks
@@ -59,6 +61,24 @@ class HelpersTest {
         assertTrue("rating sort needs votes", where.contains("kp_votes >= ?"))
         assertEquals(listOf<Any?>(Genres.bit("Комедия"), 2000, 20_000, Genres.bit("Документальный")), args)
         assertTrue("no shorts in the top", where.contains("duration >= 40"))
+    }
+
+    @Test
+    fun cleansShikimoriMarkup() {
+        val raw = "Ремейк аниме «[anime=121]Стальной алхимик[/anime]».\n\nИзнывающий от скуки [[Синигами]] Рюк [リューク] " +
+            "бросает тетрадь. Детектив [character=71]L[/character] берётся за дело. [i]Курсив[/i] и [[Ягами|Лайт]]."
+        assertEquals(
+            "Ремейк аниме «Стальной алхимик».\nИзнывающий от скуки Синигами Рюк бросает тетрадь. Детектив L берётся за дело. Курсив и Лайт.",
+            ShikimoriClient.clean(raw),
+        )
+        assertNull("too short to be a description", ShikimoriClient.clean("[i]Нет[/i]"))
+    }
+
+    @Test
+    fun veoVeoIsNotOffered() {
+        assertTrue(SourceInfo.isExcluded("Veoveo"))
+        assertTrue(SourceInfo.isExcluded("VeoVeo 4K"))
+        assertTrue(!SourceInfo.isExcluded("Turbo") && !SourceInfo.isExcluded("Collaps"))
     }
 
     @Test

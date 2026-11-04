@@ -7,7 +7,8 @@ import { stubMovie } from "../src/shared/types";
 import { parseAniSkip, parseIntroDb, parseTheIntroDb } from "../src/main/skip";
 import { balanced, parseCollaps, parseLenient } from "../src/main/resolve/collaps";
 import { base, match, queries, EXACT, PARTIAL, NONE } from "../src/main/resolve/animeTitles";
-import { normalize, where } from "../src/main/catalog";
+import { cleanShikimori, normalize, where } from "../src/main/catalog";
+import { isExcluded } from "../src/main/resolve/playerSite";
 
 const hour = 3_600_000;
 const seg = (kind: Segment["kind"], startMs: number, endMs: number | null, source = "x"): Segment => ({ kind, startMs, endMs, source });
@@ -57,6 +58,32 @@ test("Collaps movie page: HLS, voice-overs, subtitles", () => {
   assert.equal(p.stream.url, "https://cdn.example/m.m3u8?a=1&b=2");
   assert.deepEqual(p.stream.audioNames, ["Дубляж", "Оригинал"]);
   assert.equal(p.stream.subtitles[0].label, "Русские");
+});
+
+test("Collaps: DASH up to 1080p first, HLS behind it", () => {
+  const html = `makePlayer({ source: { hls: "https://c/a.m3u8", dash: "https://c/a.mpd", dasha: "https://c/a2.mpd", audio: {"names":["Дубляж","delete"]} } });`;
+  const p = parseCollaps(html, {});
+  assert.equal(p.kind, "single");
+  if (p.kind != "single") return;
+  assert.equal(p.stream.format, "DASH");
+  assert.equal(p.stream.url, "https://c/a2.mpd");
+  assert.equal(p.stream.fallback?.format, "HLS");
+  assert.equal(p.stream.fallback?.url, "https://c/a.m3u8");
+  assert.deepEqual(p.stream.fallback?.audioNames, ["Дубляж", "delete"]);
+  const hlsOnly = parseCollaps(`makePlayer({ source: { hls: "https://c/b.m3u8" } });`, {});
+  assert.ok(hlsOnly.kind == "single" && hlsOnly.stream.format == "HLS" && !hlsOnly.stream.fallback);
+});
+
+test("Shikimori markup becomes plain text", () => {
+  assert.equal(
+    cleanShikimori("Ремейк «[anime=121]Стальной алхимик[/anime]».\n\nСкучающий [[Синигами]] Рюк [リューク] бросает тетрадь. Детектив [character=71]L[/character] и [[Ягами|Лайт]]."),
+    "Ремейк «Стальной алхимик».\nСкучающий Синигами Рюк бросает тетрадь. Детектив L и Лайт.",
+  );
+  assert.equal(cleanShikimori("[i]Нет[/i]"), null);
+});
+
+test("VeoVeo is not offered", () => {
+  assert.ok(isExcluded("Veoveo") && isExcluded("VeoVeo 4K") && !isExcluded("Turbo"));
 });
 
 test("Collaps series with JS-style keys", () => {

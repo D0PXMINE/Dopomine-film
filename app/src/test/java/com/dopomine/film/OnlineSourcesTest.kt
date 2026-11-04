@@ -1,17 +1,18 @@
 package com.dopomine.film
 
-import android.net.Uri
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.hls.playlist.HlsMultivariantPlaylist
-import androidx.media3.exoplayer.hls.playlist.HlsPlaylistParser
+import com.dopomine.film.data.catalog.ShikimoriClient
+import com.dopomine.film.data.catalog.WikiClient
 import com.dopomine.film.data.net.BROWSER_UA
+import com.dopomine.film.data.net.Http
 import com.dopomine.film.data.model.ContentType
 import com.dopomine.film.data.model.Movie
 import com.dopomine.film.player.resolve.AniLibertyResolver
 import com.dopomine.film.player.resolve.AnimevostResolver
 import com.dopomine.film.player.resolve.Playable
 import com.dopomine.film.player.resolve.PlayerSite
-import com.dopomine.film.player.resolve.VeoVeoResolver
+import com.dopomine.film.player.resolve.CollapsResolver
+import com.dopomine.film.player.resolve.StreamFormat
 import com.dopomine.film.player.skip.SegmentKind
 import com.dopomine.film.player.skip.SkipRequest
 import com.dopomine.film.player.skip.SkipSegmentsProvider
@@ -25,9 +26,10 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.nio.file.Files
 
 /**
- * Talks to the real player site, VeoVeo and the anime sources. Skipped unless -Ddpm.online=true
+ * Talks to the real player site, Collaps, the anime and description sources. Skipped unless -Ddpm.online=true
  * (network-dependent, so it is not part of the regular build).
  */
 @UnstableApi
@@ -38,40 +40,40 @@ class OnlineSourcesTest {
     private val mirror = BuildConfig.DEFAULT_PLAYER_HOST
 
     @Test
-    fun movieStreamHasVoicesAndQualities() = runBlocking {
+    fun siteListsPlayersWithoutVeoVeo() = runBlocking {
         assumeTrue(System.getProperty("dpm.online") == "true")
         val sources = PlayerSite(http).sources(mirror, 301)
         println("sources: " + sources.joinToString { "${it.name} ${it.iframeUrl.take(60)}" })
-        val veo = sources.first { it.isVeoVeo }
-        val playable = VeoVeoResolver(http).resolve(veo.iframeUrl) { println(it) } as Playable.Single
-        val stream = playable.stream
-        println("stream: ${stream.url.take(120)}")
-
-        val response = http.newCall(Request.Builder().url(stream.url).header("User-Agent", BROWSER_UA).apply {
-            stream.headers.forEach { (k, v) -> header(k, v) }
-        }.build()).execute()
-        assertEquals(200, response.code)
-        val finalUrl = response.request.url.toString()
-        val playlist = response.body!!.byteStream().use { HlsPlaylistParser().parse(Uri.parse(finalUrl), it) }
-        assertTrue(playlist is HlsMultivariantPlaylist)
-        playlist as HlsMultivariantPlaylist
-        println("variants: " + playlist.variants.joinToString { "${it.format.height}p" })
-        println("audio: " + playlist.audios.joinToString { it.name })
-        println("subtitles: " + playlist.subtitles.joinToString { it.name })
-        assertTrue(playlist.variants.isNotEmpty())
-        assertTrue("several voice-overs", playlist.audios.size >= 2)
-        // relative URIs must resolve against the redirected CDN host, not the API host
-        assertTrue(playlist.variants.first().url.host != Uri.parse(stream.url).host || finalUrl == stream.url)
+        assertTrue(sources.isNotEmpty())
+        assertTrue(sources.none { it.name.contains("veoveo", ignoreCase = true) })
     }
 
     @Test
-    fun seriesHasSeasons() = runBlocking {
+    fun collapsGivesDashWithHlsBehind() = runBlocking {
         assumeTrue(System.getProperty("dpm.online") == "true")
-        val veo = PlayerSite(http).sources(mirror, 464963).first { it.isVeoVeo }
-        val playable = VeoVeoResolver(http).resolve(veo.iframeUrl) { println(it) } as Playable.Series
-        println("seasons: " + playable.seasons.joinToString { "${it.number}:${it.episodes.size}" })
-        assertTrue(playable.seasons.size >= 8)
-        assertTrue(playable.seasons.first().episodes.first().stream.url.contains(".m3u8"))
+        val playable = CollapsResolver(http).resolve(301, "tt0133093", null, "https://${PlayerSite.DEFAULT_PICKER}/") { println(it) } as Playable.Single
+        val stream = playable.stream
+        println("stream: ${stream.format} ${stream.url.take(120)} / fallback ${stream.fallback?.url?.take(120)}")
+        assertEquals(StreamFormat.DASH, stream.format)
+        assertEquals(StreamFormat.HLS, stream.fallback?.format)
+        val response = http.newCall(Request.Builder().url(stream.url).header("User-Agent", BROWSER_UA).apply {
+            stream.headers.forEach { (k, v) -> header(k, v) }
+        }.build()).execute()
+        val manifest = response.body!!.string()
+        assertEquals(200, response.code)
+        assertTrue("1080p in the DASH manifest", "height=\"1080\"" in manifest || "1920" in manifest)
+    }
+
+    @Test
+    fun descriptionsAnswerToTheNamedApp() = runBlocking {
+        assumeTrue(System.getProperty("dpm.online") == "true")
+        val named = Http.client(Files.createTempDirectory("http").toFile())
+        val wiki = WikiClient(named).summary("Матрица (фильм)")
+        println("wiki: ${wiki?.take(120)}")
+        assertTrue(wiki != null && wiki.length > 100)
+        val anime = ShikimoriClient(named).description(52991)
+        println("shikimori: ${anime?.take(120)}")
+        assertTrue(anime != null && "[character" !in anime)
     }
 
     // ---- anime ----------------------------------------------------------------------------------

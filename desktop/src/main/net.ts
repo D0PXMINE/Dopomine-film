@@ -1,7 +1,15 @@
-import { net } from "electron";
+import { app, net } from "electron";
 
 /** A desktop Chrome: the player sites serve it the same pages as a regular browser. */
 export const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
+
+/**
+ * How the app names itself to open APIs that ask clients to. Wikimedia rate-limits clients that
+ * hide who they are (a browser User-Agent outside a browser counts as "unidentified": 10 requests
+ * a minute per address); named ones get 200. Shikimori asks the same.
+ */
+const appUa = () => `Dopomine-desktop/${app.getVersion()} (https://github.com/D0PXMINE/Dopomine-film)`;
+const wantsAppName = (url: string) => /^https:\/\/([a-z0-9-]+\.)*(wikipedia\.org|wikidata\.org|wikimedia\.org|shikimori\.(io|one)|aniskip\.com)\//.test(url);
 
 /**
  * Chromium's fetch will not set Referer, Origin or Cookie by itself; requests pass them as
@@ -15,8 +23,8 @@ export class HttpError extends Error {
   }
 }
 
-function headersFor(extra: Record<string, string>): Record<string, string> {
-  const out: Record<string, string> = { "User-Agent": UA };
+function headersFor(extra: Record<string, string>, url = ""): Record<string, string> {
+  const out: Record<string, string> = { "User-Agent": wantsAppName(url) ? appUa() : UA };
   for (const [k, v] of Object.entries(extra)) {
     const lower = k.toLowerCase();
     if (lower == "referer" || lower == "origin" || lower == "cookie" || lower.startsWith("sec-fetch")) out[PASS_PREFIX + lower] = v;
@@ -29,7 +37,7 @@ export async function fetchText(url: string, headers: Record<string, string> = {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await net.fetch(url, { headers: headersFor(headers), signal: ctrl.signal, bypassCustomProtocolHandlers: true });
+    const res = await net.fetch(url, { headers: headersFor(headers, url), signal: ctrl.signal, bypassCustomProtocolHandlers: true });
     if (!res.ok) throw new HttpError(res.status, url);
     return await res.text();
   } finally {
@@ -37,8 +45,8 @@ export async function fetchText(url: string, headers: Record<string, string> = {
   }
 }
 
-export async function fetchJson<T = unknown>(url: string, headers: Record<string, string> = {}): Promise<T> {
-  return JSON.parse(await fetchText(url, { Accept: "application/json", ...headers })) as T;
+export async function fetchJson<T = unknown>(url: string, headers: Record<string, string> = {}, timeoutMs?: number): Promise<T> {
+  return JSON.parse(await fetchText(url, { Accept: "application/json", ...headers }, timeoutMs)) as T;
 }
 
 export async function postForm(url: string, fields: Record<string, string>): Promise<string> {

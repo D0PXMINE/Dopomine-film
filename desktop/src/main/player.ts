@@ -1,11 +1,10 @@
-import type { Movie, Playable, ResolveResult, SourceChoice, SourceInfo, Stream } from "../shared/types";
+import type { Movie, Playable, ResolveResult, SourceChoice, SourceInfo } from "../shared/types";
 import { isAnime, SOURCE } from "../shared/types";
 import * as catalog from "./catalog";
 import { resolveAniLiberty } from "./resolve/aniliberty";
 import { resolveAnimevost } from "./resolve/animevost";
 import { resolveCollaps } from "./resolve/collaps";
-import { isCollaps, isVeoVeo, pickerHost, sources } from "./resolve/playerSite";
-import { finalizeVeoVeo, resolveVeoVeo } from "./resolve/veoveo";
+import { isCollaps, pickerHost, sources } from "./resolve/playerSite";
 import * as site from "./site";
 import * as store from "./store";
 
@@ -29,10 +28,22 @@ export const onLog = (l: (line: string) => void) => {
 // ---- resolving ------------------------------------------------------------------------------
 
 const mirror = () => store.settings().playerHost.replace(/\/+$/, "");
-let listFor: { id: number; list: SourceInfo[] } | null = null;
+
+const SOURCES_TIMEOUT_MS = 10_000;
+/** Collaps is found by its own ID too: it waits for the site's list only this long. */
+const COLLAPS_LIST_WAIT_MS = 3_000;
+const DIRECT_TIMEOUT_MS = 30_000;
+/** How long a page runs hidden before it is shown to the viewer (catching goes on there). */
+const SNIFF_HIDDEN_MS = 12_000;
+const TIMED_OUT = Symbol("timed out");
+
+function within<T>(p: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
+  let timer: NodeJS.Timeout | undefined;
+  return Promise.race([p, new Promise<typeof TIMED_OUT>(r => { timer = setTimeout(() => r(TIMED_OUT), ms); })]).finally(() => clearTimeout(timer));
+}
 
 /** Sources played natively, in the order they are tried; anime has its own dub teams first. */
-const directOrder = (m: Movie) => [...(isAnime(m) ? [SOURCE.ANILIBERTY, SOURCE.ANIMEVOST] : []), SOURCE.VEOVEO, SOURCE.COLLAPS];
+const directOrder = (m: Movie) => [...(isAnime(m) ? [SOURCE.ANILIBERTY, SOURCE.ANIMEVOST] : []), SOURCE.COLLAPS];
 
 function choicesFor(m: Movie, list: SourceInfo[]): SourceChoice[] {
   const out: SourceChoice[] = [];
@@ -40,10 +51,9 @@ function choicesFor(m: Movie, list: SourceInfo[]): SourceChoice[] {
     out.push({ key: SOURCE.ANILIBERTY, title: "AniLiberty", subtitle: "Аниме · озвучка AniLibria, до 1080p, все сезоны" });
     out.push({ key: SOURCE.ANIMEVOST, title: "AnimeVost", subtitle: "Аниме · озвучка AnimeVost, 720p" });
   }
-  if (list.some(isVeoVeo)) out.push({ key: SOURCE.VEOVEO, title: "VeoVeo", subtitle: "Прямой поток · озвучки, субтитры, качество и серии" });
-  out.push({ key: SOURCE.COLLAPS, title: "Collaps", subtitle: "Прямой поток · озвучки, качество и серии" });
-  for (const s of list.filter(s => !isVeoVeo(s) && !isCollaps(s))) {
-    out.push({ key: `src:${s.name}`, title: s.name, subtitle: "Поток через сайт" + (s.voices[0] ? ` · ${s.voices[0]}` : "") });
+  out.push({ key: SOURCE.COLLAPS, title: "Collaps", subtitle: "Прямой поток до 1080p · озвучки, субтитры и серии" });
+  for (const s of list.filter(s => !isCollaps(s))) {
+    out.push({ key: `src:${s.name}`, title: s.name, subtitle: "Поток со страницы плеера" + (s.voices[0] ? ` · ${s.voices[0]}` : "") });
   }
   out.push({ key: SOURCE.SITE, title: "Авто", subtitle: "Поток плеера, который выберет сайт" });
   out.push({ key: SOURCE.SITE_PLAYER, title: "Плеер сайта", subtitle: "Страница сайта без рекламы" });
@@ -57,87 +67,114 @@ async function hydrate(m: Movie): Promise<Movie> {
   return full ? { ...m, imdbId: m.imdbId ?? full.imdbId, malId: m.malId ?? full.malId, genres: [...new Set([...m.genres, ...full.genres])] } : m;
 }
 
-async function list(m: Movie): Promise<SourceInfo[]> {
+let listFor: { id: number; list: Promise<SourceInfo[]> } | null = null;
+
+/** The site's list of players, fetched alongside the direct sources (a slow site never holds playback up). */
+function list(m: Movie): Promise<SourceInfo[]> {
   if (listFor?.id == m.id) return listFor.list;
-  try {
-    const found = await sources(mirror(), m.id, m.imdbId);
+  const pending = (async () => {
+    const found = await within(sources(mirror(), m.id, m.imdbId).catch(e => {
+      log(`Список плееров не получен: ${(e as Error).message}`);
+      return [] as SourceInfo[];
+    }), SOURCES_TIMEOUT_MS);
+    if (found === TIMED_OUT) {
+      log(`Список плееров: сайт не ответил за ${SOURCES_TIMEOUT_MS / 1000} с`);
+      return [];
+    }
     if (found.length) log(`Плееры на сайте: ${found.map(s => s.name).join(", ")}`);
-    listFor = { id: m.id, list: found };
     return found;
-  } catch (e) {
-    log(`Список плееров не получен: ${(e as Error).message}`);
-    return [];
-  }
+  })();
+  listFor = { id: m.id, list: pending };
+  // an empty answer is asked again next time
+  void pending.then(found => { if (!found.length && listFor?.list === pending) listFor = null; });
+  return pending;
 }
 
-async function tryDirect(m: Movie, key: string, found: SourceInfo[]): Promise<Playable | null> {
-  try {
+const listWithin = async (m: Movie, ms: number) => {
+  const found = await within(list(m), ms);
+  return found === TIMED_OUT ? [] : found;
+};
+
+export async function choicesOf(input: Movie): Promise<SourceChoice[]> {
+  const m = await hydrate(input);
+  return choicesFor(m, await listWithin(m, SOURCES_TIMEOUT_MS));
+}
+
+const sourceName = (key: string) => key == SOURCE.ANILIBERTY ? "AniLiberty" : key == SOURCE.ANIMEVOST ? "AnimeVost" : "Collaps";
+
+/** One direct source, given [DIRECT_TIMEOUT_MS] to answer before the next one is tried. */
+async function tryDirect(m: Movie, key: string): Promise<Playable | null> {
+  const run = async (): Promise<Playable | null> => {
     switch (key) {
       case SOURCE.ANILIBERTY:
         return await resolveAniLiberty(m, log);
       case SOURCE.ANIMEVOST:
         return await resolveAnimevost(m, log);
-      case SOURCE.VEOVEO: {
-        const veo = found.find(isVeoVeo);
-        return veo ? await resolveVeoVeo(veo.iframeUrl, log) : null;
-      }
       case SOURCE.COLLAPS: {
+        const found = await listWithin(m, COLLAPS_LIST_WAIT_MS);
         const picker = await pickerHost(mirror(), m.id);
         return await resolveCollaps(m.id, m.imdbId, found.find(isCollaps)?.iframeUrl ?? null, `https://${picker}/`, log);
       }
     }
+    return null;
+  };
+  try {
+    const r = await within(run(), DIRECT_TIMEOUT_MS);
+    if (r !== TIMED_OUT) return r;
+    log(`${sourceName(key)}: не ответил за ${DIRECT_TIMEOUT_MS / 1000} с`);
   } catch (e) {
     log((e as Error).message);
   }
   return null;
 }
 
-async function sniffSite(m: Movie, adBlock: boolean, embedUrl?: string): Promise<Stream | null> {
+/**
+ * Catches the stream of a page run hidden; if none comes within [SNIFF_HIDDEN_MS], the page is
+ * shown to the viewer instead and catching goes on there (see site.showSite).
+ */
+async function sniffOrShow(m: Movie, key: string, name: string, base: Omit<ResolveResult, "choice" | "playable">, embedUrl?: string): Promise<ResolveResult> {
   const picker = await pickerHost(mirror(), m.id);
-  log(embedUrl ? "Ловим поток плеера…" : adBlock ? "Ловим поток со страницы плеера…" : "Пробуем ещё раз без фильтра рекламы…");
-  const s = await site.sniff(mirror(), picker, m.id, { adBlock, manifestsOnly: !adBlock, embedUrl }, log);
-  if (!s) log("Поток не появился за 30 с");
-  return s;
+  const adBlock = store.settings().adBlock;
+  log(`${name}: ловим поток со страницы плеера…`);
+  const s = await site.sniff(mirror(), picker, m.id, { adBlock, manifestsOnly: !adBlock, embedUrl, timeoutMs: SNIFF_HIDDEN_MS }, log);
+  // the page goes along: it plays the video itself if the app cannot
+  if (s) return { ...base, choice: key, playable: { kind: "single", sourceName: name, stream: s }, page: { embedUrl: embedUrl ?? null, name, catching: false } };
+  log(`${name}: поток пока не пойман — показываем страницу плеера, приложение ждёт дальше`);
+  return { ...base, choice: key, playable: null, page: { embedUrl: embedUrl ?? null, name, catching: true } };
 }
 
 export async function resolve(input: Movie): Promise<ResolveResult> {
   lines.length = 0;
   const m = await hydrate(input);
   log(`Фильм: ${m.title} (Кинопоиск ${m.id}${isAnime(m) ? ", аниме" : ""})`);
-  const found = await list(m);
-  const base = { choices: choicesFor(m, found), order: directOrder(m), movie: m };
-  for (const key of directOrder(m)) {
-    const playable = await tryDirect(m, key, found);
+  void list(m);
+  const order = directOrder(m);
+  for (const key of order) {
+    const playable = await tryDirect(m, key);
     if (playable) {
       log(`${playable.sourceName}: поток найден`);
-      return { ...base, choice: key, playable };
+      // the menu gets the site's players if they come in soon; it asks again when opened
+      return { choices: choicesFor(m, await listWithin(m, 2_000)), order, movie: m, choice: key, playable };
     }
   }
-  const adBlock = store.settings().adBlock;
-  const caught = (await sniffSite(m, adBlock)) ?? (adBlock ? await sniffSite(m, false) : null);
-  if (caught) return { ...base, choice: SOURCE.SITE, playable: { kind: "single", sourceName: "Сайт", stream: caught } };
-  log("Прямой поток не найден — открываем плеер сайта");
-  return { ...base, choice: SOURCE.SITE_PLAYER, playable: null };
+  const base = { choices: choicesFor(m, await listWithin(m, SOURCES_TIMEOUT_MS)), order, movie: m };
+  return sniffOrShow(m, SOURCE.SITE, "Сайт", base);
 }
 
 /** A specific source, picked in the "Источник" menu or next in the fallback chain. */
 export async function choose(input: Movie, key: string): Promise<ResolveResult> {
   const m = await hydrate(input);
-  const found = await list(m);
-  const base = { choices: choicesFor(m, found), order: directOrder(m), movie: m };
-  if (key == SOURCE.SITE_PLAYER) return { ...base, choice: key, playable: null };
+  const order = directOrder(m);
+  const found = await listWithin(m, SOURCES_TIMEOUT_MS);
+  const base = { choices: choicesFor(m, found), order, movie: m };
+  if (key == SOURCE.SITE_PLAYER) return { ...base, choice: key, playable: null, page: { embedUrl: null, name: "Плеер сайта", catching: false } };
   if (key == SOURCE.SITE || key.startsWith("src:")) {
     const info = found.find(s => `src:${s.name}` == key);
-    const caught = await sniffSite(m, store.settings().adBlock, info?.iframeUrl);
-    return caught
-      ? { ...base, choice: key, playable: { kind: "single", sourceName: info?.name ?? "Сайт", stream: caught } }
-      : { ...base, choice: null, playable: null, error: `${info?.name ?? "Сайт"}: поток не найден` };
+    return sniffOrShow(m, key, info?.name ?? "Сайт", base, info?.iframeUrl);
   }
-  const playable = await tryDirect(m, key, found);
+  const playable = await tryDirect(m, key);
   if (playable) log(`${playable.sourceName}: поток найден`);
   return playable
     ? { ...base, choice: key, playable }
     : { ...base, choice: null, playable: null, error: `${base.choices.find(c => c.key == key)?.title ?? key} не отдал поток для этого фильма` };
 }
-
-export const finalize = (s: Stream) => finalizeVeoVeo(s);

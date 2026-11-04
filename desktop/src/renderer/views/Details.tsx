@@ -76,7 +76,7 @@ export default function Details({ id }: { id: number }) {
         <section className="details-text">
           <div className="caps">Описание</div>
           {d == null ? <div className="skeleton text-block" /> : <p>{d.description ?? "Описания пока нет."}</p>}
-          {d?.description && <div className="mono muted small">Википедия</div>}
+          {d?.description && <div className="mono muted small">по материалам {d.descriptionSource ?? "Википедии"}</div>}
           {d && d.cast.length > 0 && (
             <>
               <div className="caps" style={{ marginTop: 20 }}>В ролях</div>

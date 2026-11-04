@@ -29,8 +29,8 @@ android {
         applicationId = "com.dopomine.film"
         minSdk = 24
         targetSdk = 35
-        versionCode = 5
-        versionName = "2.2.1"
+        versionCode = 6
+        versionName = "2.3.0"
 
         buildConfigField("String", "DEFAULT_PLAYER_HOST", "\"https://fz7-16gs81j.troutcdn.site\"")
         buildConfigField("String", "CATALOG_UPDATE_URL", "\"https://github.com/D0PXMINE/Dopomine-film/releases/download/catalog/catalog.db.gz\"")

@@ -40,6 +40,8 @@ export function stubMovie(id: number, title = `Кинопоиск #${id}`): Movi
 export interface MovieDetails {
   movie: Movie;
   description?: string | null;
+  /** Where the description comes from: "Википедии", "Shikimori" (shown as "по материалам …"). */
+  descriptionSource?: string | null;
   directors: string[];
   cast: string[];
 }
@@ -108,6 +110,8 @@ export interface Stream {
   variants: Variant[];
   /** Intro / credits marks the source itself publishes (AniLiberty does). */
   segments: Segment[];
+  /** The same video in another form, played if this one fails (Collaps: HLS up to 720p behind DASH up to 1080p). */
+  fallback?: Stream;
 }
 
 export interface Episode {
@@ -144,11 +148,19 @@ export interface SourceChoice {
 export const SOURCE = {
   ANILIBERTY: "aniliberty",
   ANIMEVOST: "animevost",
-  VEOVEO: "veoveo",
   COLLAPS: "collaps",
   SITE: "site",
   SITE_PLAYER: "site_player",
 } as const;
+
+/** A player page shown over the player area, while the app may still catch its stream. */
+export interface SitePage {
+  /** One player's page; null for the site itself. */
+  embedUrl: string | null;
+  name: string;
+  /** The app still waits for the page's stream (the viewer may press play there). */
+  catching: boolean;
+}
 
 /** What the main process found for a title: the choices and, if it could, something to play. */
 export interface ResolveResult {
@@ -157,6 +169,8 @@ export interface ResolveResult {
   order: string[];
   choice: string | null;
   playable: Playable | null;
+  /** Nothing to play directly: this page is shown instead (catching goes on if it says so). */
+  page?: SitePage | null;
   /** The movie with the catalog's IDs filled in (favourites and history keep only a few fields). */
   movie: Movie;
   error?: string | null;
@@ -249,8 +263,12 @@ export interface DpmApi {
     segments(request: SkipRequest): Promise<Segment[]>;
     log(): Promise<string[]>;
     onLog(listener: (line: string) => void): () => void;
-    /** The site's own player, shown over the player area (last resort). */
-    showSite(movie: Movie, bounds: { x: number; y: number; width: number; height: number }): Promise<void>;
+    /** The source menu with the site's full list of players (it may arrive after playback starts). */
+    choices(movie: Movie): Promise<SourceChoice[]>;
+    /** A player page (or the site) over the player area; with page.catching its stream is caught. */
+    showSite(movie: Movie, bounds: { x: number; y: number; width: number; height: number }, page?: SitePage | null): Promise<void>;
+    /** A stream caught from the shown page, to be played by the app's own player. */
+    onCaught(listener: (stream: Stream, name: string) => void): () => void;
     hideSite(): Promise<void>;
     siteBounds(bounds: { x: number; y: number; width: number; height: number }): Promise<void>;
     siteSeek(seconds: number): Promise<void>;

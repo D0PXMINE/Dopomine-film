@@ -62,7 +62,9 @@ import com.dopomine.film.ui.theme.DopomineTheme
 import com.dopomine.film.ui.theme.ThemeMode
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -72,9 +74,11 @@ import kotlin.math.roundToInt
 /**
  * The player. It finds where the player site takes the video from and plays that stream
  * natively (ExoPlayer):
- *  1. Collaps — its embed page lists the HLS stream, voice-overs, subtitles and all episodes;
- *  2. any other player — the site runs hidden and the stream address its player requests is caught;
- *  3. if neither works, the site's own player is shown (ads and popups blocked).
+ *  1. direct sources — AniLiberty and AnimeVost for anime, then Collaps, whose embed page lists
+ *     the DASH/HLS streams, voice-overs, subtitles and all episodes;
+ *  2. any other player — its page runs (hidden at first, then on screen) and the stream address
+ *     its player requests is caught;
+ *  3. if nothing can be caught, that page itself is the player (ads and popups blocked).
  */
 @OptIn(UnstableApi::class)
 class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
@@ -91,7 +95,17 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
         private const val EXTRA_KP = "kp"
         private const val EXTRA_IMDB_RATING = "imdb_rating"
         private const val ACTION_PIP_TOGGLE = "com.dopomine.film.PIP_TOGGLE"
-        private const val SNIFF_TIMEOUT_MS = 30_000L
+        /** How long a page runs hidden behind the loading screen before it is shown as it is. */
+        private const val SNIFF_HIDDEN_MS = 10_000L
+        /** How long the app listens for a page's stream in all (the viewer may press play meanwhile). */
+        private const val SNIFF_TOTAL_MS = 90_000L
+        private const val SOURCES_TIMEOUT_MS = 10_000L
+        /** Collaps can start without the site's list; it waits for it only this long. */
+        private const val COLLAPS_LIST_WAIT_MS = 3_000L
+        private const val DIRECT_TIMEOUT_MS = 30_000L
+        /** A caught video shorter than this is an ad: the page goes on to the film. */
+        private const val AD_MAX_DURATION_MS = 4 * 60_000L
+        private const val AD_WAIT_MS = 45_000L
         private const val MAX_NETWORK_RETRIES = 2
         private const val NEXT_COUNTDOWN = 5
 
@@ -142,8 +156,13 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
 
     private var resolveJob: Job? = null
     private var sources: List<SourceInfo> = emptyList()
+    private var sourcesJob: Deferred<List<SourceInfo>>? = null
     private var sniffWaiter: CompletableDeferred<Stream>? = null
     private var sniffedName: String? = null
+    private var adCheckDone = false
+    /** The stream playing now (one form of the item: its [Stream.fallback] may be tried next). */
+    private var currentStream: Stream? = null
+    private var preferFallback = false
     private var itemKey: String? = null
     private var itemSeason: Int? = null
     private var itemEpisode: Int? = null
@@ -294,6 +313,7 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
     private suspend fun resolve() {
         session.mode = Mode.RESOLVING
         session.error = null
+        session.sniffHint = null
         session.status = "Ищем, откуда сайт берёт видео…"
         session.log.clear()
         // favourites and history keep only a few fields: take the IDs the players match by from the catalog
@@ -309,23 +329,44 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
         log("Фильм: ${movie.title} (Кинопоиск ${movie.id}${if (movie.isAnime) ", аниме" else ""})")
         session.introMark = container.settings.introMark(movie.id)
         session.markStart = null
-
-        val sources = runCatching { container.playerSite.sources(mirror, movie.id, movie.imdbId) }
-            .onFailure { if (it is CancellationException) throw it; log("Список плееров не получен: ${it.message}") }
-            .getOrDefault(emptyList())
-        if (sources.isNotEmpty()) log("Плееры на сайте: ${sources.joinToString { it.name }}")
-        this.sources = sources
-        session.choices = buildChoices(sources)
+        startLoadingSources()
 
         for (key in directOrder) if (tryDirect(key)) return
 
-        if (sniff("Ловим поток со страницы плеера…", SourceChoice.SITE, "Сайт") { it.loadSite(mirror, movie.id) }) return
+        // nothing plays directly: the site's own page, its stream caught as it starts
+        if (!sniff("Ловим поток со страницы плеера…", SourceChoice.SITE, "Сайт") { it.loadSite(mirror, movie.id) }) {
+            log("Остаётся плеер сайта")
+        }
+    }
 
-        // the blocker may have cut something the player needs: one more try without it (manifests only, so ads cannot be caught)
-        if (settings.adBlock && sniff("Пробуем ещё раз без фильтра рекламы…", SourceChoice.SITE, "Сайт", adBlock = false) { it.loadSite(mirror, movie.id) }) return
+    /**
+     * The site's list of players, fetched alongside the direct sources: only the source menu and
+     * Collaps' address need it, so a slow site never holds playback up.
+     */
+    private fun startLoadingSources() {
+        sourcesJob?.cancel()
+        sources = emptyList()
+        session.choices = buildChoices(emptyList())
+        val id = movie.id
+        sourcesJob = lifecycleScope.async {
+            val list = withTimeoutOrNull(SOURCES_TIMEOUT_MS) {
+                runCatching { container.playerSite.sources(mirror, movie.id, movie.imdbId) }
+                    .onFailure { if (it is CancellationException) throw it; log("Список плееров не получен: ${it.message}") }
+                    .getOrDefault(emptyList())
+            } ?: emptyList<SourceInfo>().also { log("Список плееров: сайт не ответил за ${SOURCES_TIMEOUT_MS / 1000} с") }
+            if (id == movie.id) {
+                if (list.isNotEmpty()) log("Плееры на сайте: ${list.joinToString { it.name }}")
+                sources = list
+                session.choices = buildChoices(list)
+            }
+            list
+        }
+    }
 
-        log("Прямой поток не найден — открываем плеер сайта")
-        showSitePlayer()
+    /** The list of players, waiting for it at most [waitMs]. */
+    private suspend fun sourcesWithin(waitMs: Long): List<SourceInfo> {
+        val job = sourcesJob?.takeIf { !it.isCancelled } ?: return sources
+        return withTimeoutOrNull(waitMs) { job.await() } ?: sources
     }
 
     /** Sources played natively, in the order they are tried; anime has its own dub teams first. */
@@ -335,35 +376,41 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
                 add(SourceChoice.ANILIBERTY)
                 add(SourceChoice.ANIMEVOST)
             }
-            add(SourceChoice.VEOVEO)
             add(SourceChoice.COLLAPS)
         }
 
     private suspend fun tryDirect(key: String): Boolean = when (key) {
-        SourceChoice.ANILIBERTY -> tryAnime(key, AniLibertyResolver.NAME) { container.aniliberty.resolve(movie, ::log) }
-        SourceChoice.ANIMEVOST -> tryAnime(key, AnimevostResolver.NAME) { container.animevost.resolve(movie, ::log) }
-        SourceChoice.VEOVEO -> sources.firstOrNull { it.isVeoVeo }?.let {
-            session.status = "VeoVeo: получаем поток…"
-            tryVeoVeo(it)
-        } ?: false
-        SourceChoice.COLLAPS -> {
-            session.status = "Collaps: получаем поток…"
-            tryCollaps(sources.firstOrNull { it.isCollaps })
+        SourceChoice.ANILIBERTY -> tryNative(AniLibertyResolver.NAME, key, "ищем аниме…") { container.aniliberty.resolve(movie, ::log) }
+        SourceChoice.ANIMEVOST -> tryNative(AnimevostResolver.NAME, key, "ищем аниме…") { container.animevost.resolve(movie, ::log) }
+        SourceChoice.COLLAPS -> tryNative("Collaps", key, "получаем поток…") {
+            // Collaps is found by its own ID too: its address from the site's list is only a hint
+            val info = sourcesWithin(COLLAPS_LIST_WAIT_MS).firstOrNull { it.isCollaps }
+            val picker = container.playerSite.pickerHost(mirror, movie.id)
+            container.collaps.resolve(movie.id, movie.imdbId, info?.iframeUrl, "https://$picker/", ::log)
         }
         else -> false
     }
 
-    private suspend fun tryAnime(key: String, name: String, resolve: suspend () -> Playable): Boolean = try {
-        session.status = "$name: ищем аниме…"
-        val playable = resolve()
-        log("$name: поток найден")
-        startNative(playable, key)
-        true
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: Exception) {
-        log("$name: ${e.message}")
-        false
+    /** One direct source, given [DIRECT_TIMEOUT_MS] to answer before the next one is tried. */
+    private suspend fun tryNative(name: String, key: String, status: String, resolve: suspend () -> Playable): Boolean {
+        session.mode = Mode.RESOLVING
+        session.status = "$name: $status"
+        return try {
+            val playable = withTimeoutOrNull(DIRECT_TIMEOUT_MS) { resolve() }
+            if (playable == null) {
+                log("$name: не ответил за ${DIRECT_TIMEOUT_MS / 1000} с")
+                false
+            } else {
+                log("$name: поток найден")
+                startNative(playable, key)
+                true
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log("$name: ${e.message}")
+            false
+        }
     }
 
     private fun buildChoices(sources: List<SourceInfo>): List<SourceChoice> = buildList {
@@ -371,77 +418,95 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
             add(SourceChoice(SourceChoice.ANILIBERTY, "AniLiberty", "Аниме · озвучка AniLibria, до 1080p, все сезоны", null))
             add(SourceChoice(SourceChoice.ANIMEVOST, "AnimeVost", "Аниме · озвучка AnimeVost, 720p", null))
         }
-        sources.firstOrNull { it.isVeoVeo }?.let {
-            add(SourceChoice(SourceChoice.VEOVEO, "VeoVeo", "Прямой поток · озвучки, субтитры, качество и серии в приложении", it))
-        }
-        add(SourceChoice(SourceChoice.COLLAPS, "Collaps", "Прямой поток · озвучки, качество и серии в приложении",
+        add(SourceChoice(SourceChoice.COLLAPS, "Collaps", "Прямой поток до 1080p · озвучки, субтитры и серии в приложении",
             sources.firstOrNull { it.isCollaps }))
         sources.filterNot { it.isDirect }.forEach { s ->
-            add(SourceChoice("src:${s.name}", s.name, "Поток через сайт" + (s.voices.firstOrNull()?.let { " · $it" } ?: ""), s))
+            add(SourceChoice("src:${s.name}", s.name, "Поток со страницы плеера" + (s.voices.firstOrNull()?.let { " · $it" } ?: ""), s))
         }
         add(SourceChoice(SourceChoice.SITE, "Авто", "Поток плеера, который выберет сайт", null))
         add(SourceChoice(SourceChoice.SITE_PLAYER, "Плеер сайта", "Страница сайта без рекламы, без нативных функций", null))
     }
 
-    private suspend fun tryVeoVeo(info: SourceInfo): Boolean = try {
-        val playable = container.veoveo.resolve(info.iframeUrl, ::log)
-        log("VeoVeo: поток найден")
-        startNative(playable, SourceChoice.VEOVEO)
-        true
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: Exception) {
-        log("VeoVeo: ${e.message}")
-        false
-    }
-
-    private suspend fun tryCollaps(info: SourceInfo?): Boolean {
-        val picker = runCatching { container.playerSite.pickerHost(mirror, movie.id) }.getOrDefault("linkpp.ink")
-        return try {
-            val playable = container.collaps.resolve(movie.id, movie.imdbId, info?.iframeUrl, "https://$picker/", ::log)
-            log("Collaps: поток найден")
-            startNative(playable, SourceChoice.COLLAPS)
-            true
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            log("Collaps: ${e.message}")
-            false
-        }
-    }
-
-    /** Runs the page hidden and waits for its player to request a stream. */
-    private suspend fun sniff(
-        status: String,
-        choiceKey: String,
-        name: String,
-        adBlock: Boolean = settings.adBlock,
-        load: (WebPlayer) -> Unit,
-    ): Boolean {
+    /**
+     * Opens a page and catches the stream its player requests. The page first runs hidden behind
+     * the loading screen; if nothing is caught within [SNIFF_HIDDEN_MS] it is shown as it is — the
+     * viewer can press play there or pass the player's bot check — and the app keeps listening up
+     * to [SNIFF_TOTAL_MS]. Returns true once the stream plays natively; false leaves the page on
+     * screen as the player.
+     */
+    private suspend fun sniff(status: String, choiceKey: String, name: String, load: (WebPlayer) -> Unit): Boolean {
         session.mode = Mode.RESOLVING
         session.status = status
+        session.sniffHint = null
+        session.currentChoice = choiceKey
+        session.subtitle = name
         val w = ensureWeb()
-        w.adBlock = adBlock
-        w.manifestsOnly = !adBlock
+        w.adBlock = settings.adBlock
+        // with ads let through, only manifests count: ad videos are MP4
+        w.manifestsOnly = !settings.adBlock
         w.setSniffing(true)
+        native.exo.stop()
+        resetSegments(emptyList())
+        webDurationMs = 0L
+        // the page works behind the (black) video surface and the loading screen
         webContainer.visibility = View.VISIBLE
         playerView.visibility = View.VISIBLE
-        native.exo.stop()
-        val waiter = CompletableDeferred<Stream>()
-        sniffWaiter = waiter
         sniffedName = name
         load(w)
-        val stream = withTimeoutOrNull(SNIFF_TIMEOUT_MS) { waiter.await() }
-        sniffWaiter = null
-        if (stream == null) {
-            log("$name: поток не появился за ${SNIFF_TIMEOUT_MS / 1000} с")
-            w.setSniffing(false)
+        return awaitSniffed(name, SNIFF_HIDDEN_MS)
+    }
+
+    /** Waits for the page's stream; after [hiddenMs] the page is shown and the wait goes on. */
+    private suspend fun awaitSniffed(name: String, hiddenMs: Long): Boolean {
+        val waiter = CompletableDeferred<Stream>()
+        sniffWaiter = waiter
+        val stream = try {
+            withTimeoutOrNull(hiddenMs) { waiter.await() } ?: run {
+                log("$name: поток пока не пойман — показываем страницу плеера, приложение ждёт дальше")
+                revealPage(name)
+                withTimeoutOrNull((SNIFF_TOTAL_MS - hiddenMs).coerceAtLeast(SNIFF_HIDDEN_MS)) { waiter.await() }
+            }
+        } finally {
+            if (sniffWaiter === waiter) sniffWaiter = null
+        }
+        val w = web
+        if (stream == null || w == null) {
+            log("$name: поток не пойман за ${SNIFF_TOTAL_MS / 1000} с — играет плеер страницы")
+            pageAsPlayer(name)
             return false
         }
         w.muteAll()
-        session.currentChoice = choiceKey
+        w.setSniffing(false)
+        session.sniffHint = null
         playSniffed(stream, name)
         return true
+    }
+
+    /** The page on screen while the app still listens for its stream. */
+    private fun revealPage(name: String) {
+        val w = web ?: return
+        w.setSniffing(true, shown = true)
+        session.mode = Mode.WEB
+        session.subtitle = name
+        session.sniffHint = "Если видео не запускается само, нажмите ▶ в плеере — приложение подхватит поток"
+        session.controlsVisible = true
+        playerView.visibility = View.GONE
+        webContainer.visibility = View.VISIBLE
+    }
+
+    /** The page stays as the player: no more catching, its sound back on. */
+    private fun pageAsPlayer(name: String) {
+        val w = web ?: return
+        w.setSniffing(false)
+        w.release()
+        native.exo.stop()
+        sniffedName = null
+        session.sniffHint = null
+        session.playable = null
+        session.mode = Mode.WEB
+        session.subtitle = name
+        playerView.visibility = View.GONE
+        webContainer.visibility = View.VISIBLE
     }
 
     private fun ensureWeb(): WebPlayer = web ?: WebPlayer(this, container.adBlocker, this).also {
@@ -450,12 +515,15 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
     }
 
     private suspend fun startNative(playable: Playable, choiceKey: String) {
+        sniffWaiter = null
         web?.setSniffing(false)
         web?.pausePage()
         webContainer.visibility = View.INVISIBLE
+        session.sniffHint = null
         session.playable = playable
         session.currentChoice = choiceKey
         sniffedName = null
+        preferFallback = false
         when (playable) {
             is Playable.Single -> playItem(playable.stream, "movie", null, null, playable.sourceName)
             is Playable.Series -> {
@@ -474,6 +542,7 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
         session.playable = Playable.Single(name, stream)
         session.webOverlay = false
         durationResumeChecked = false
+        adCheckDone = false
         lifecycleScope.launch { playItem(stream, null, null, null, name) }
     }
 
@@ -487,13 +556,11 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
         val start = if (key != null && settings.autoResume) {
             container.library.position(movie.id, key)?.takeIf { it > 30 }?.let { it * 1000L } ?: 0L
         } else 0L
-        val playable = runCatching { container.veoveo.finalize(stream) }.getOrElse {
-            if (it is CancellationException) throw it
-            log("Не удалось получить ссылку: ${it.message}")
-            stream
-        }
+        // once the first form of a source failed on this device, its fallback goes first
+        val chosen = stream.fallback?.takeIf { preferFallback } ?: stream
+        currentStream = chosen
         playerView.visibility = View.VISIBLE
-        native.play(playable, start)
+        native.play(chosen, start)
         session.resumedAt = if (start > 0) (start / 1000).toInt() else null
         session.mode = Mode.NATIVE
         session.controlsVisible = true
@@ -501,7 +568,7 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
             sourceName,
             if (season != null && episode != null) "$season сезон · $episode серия" else null,
         ).joinToString(" · ")
-        log("Воспроизведение: ${stream.url.take(100)}")
+        log("Воспроизведение (${chosen.format.name}): ${chosen.url.take(100)}")
     }
 
     private suspend fun playEpisodeInternal(season: Int, episode: Int) {
@@ -514,13 +581,17 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
     }
 
     private fun showSitePlayer() {
+        sniffWaiter = null
         val w = ensureWeb()
         native.exo.stop()
         w.adBlock = settings.adBlock
         w.manifestsOnly = false
         w.setSniffing(false)
+        w.release()
         session.playable = null
         session.currentChoice = SourceChoice.SITE_PLAYER
+        session.sniffHint = null
+        sniffedName = null
         resetSegments(emptyList())
         webDurationMs = 0L
         session.mode = Mode.WEB
@@ -539,6 +610,13 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
                 delay(500)
                 if (session.mode != Mode.NATIVE) continue
                 native.tick()
+                if (!adCheckDone && itemKey == null && sniffedName != null && native.state.durationMs > 0) {
+                    adCheckDone = true
+                    if (looksLikeAd(native.state.durationMs)) {
+                        rejectCaughtAd()
+                        continue
+                    }
+                }
                 if (!durationResumeChecked && itemKey == null && native.state.durationMs > 0) {
                     durationResumeChecked = true
                     resumeByDuration()
@@ -555,6 +633,34 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
                 }
             }
         }
+    }
+
+    /** A caught video much shorter than the title: a pre-roll the player shows before the film. */
+    private fun looksLikeAd(durationMs: Long): Boolean {
+        val expectedMinutes = movie.duration
+        return durationMs < AD_MAX_DURATION_MS && (expectedMinutes == null || expectedMinutes >= 10)
+    }
+
+    /** The caught stream was an ad: the page plays it to its end (silently) and the film is caught next. */
+    private fun rejectCaughtAd() {
+        val name = sniffedName ?: return
+        val w = web ?: return
+        val url = currentStream?.url
+        log("$name: пойман ролик на ${Format.clock((native.state.durationMs / 1000).toInt())} — это реклама, ждём фильм")
+        url?.let(w::reject)
+        // the ad's other playlists were caught along with it
+        w.rejectCaught()
+        native.exo.stop()
+        session.playable = null
+        session.mode = Mode.RESOLVING
+        session.status = "$name: ждём конца рекламы…"
+        playerView.visibility = View.VISIBLE
+        webContainer.visibility = View.VISIBLE
+        w.setSniffing(true)
+        w.resumePage()
+        resolveJob?.cancel()
+        // pre-rolls last up to half a minute: the page stays hidden through them
+        resolveJob = lifecycleScope.launch { awaitSniffed(name, AD_WAIT_MS) }
     }
 
     // ---- Intro skipping ---------------------------------------------------------------------------
@@ -750,15 +856,31 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
             }
             return
         }
+        // the same video in its other form (Collaps: HLS behind DASH) before giving up on the source
+        val fallback = currentStream?.fallback
+        if (fallback != null) {
+            log("${currentStream?.format?.name} не играет — пробуем ${fallback.format.name}")
+            preferFallback = true
+            currentStream = fallback
+            networkRetries = 0
+            native.play(fallback, native.exo.currentPosition.coerceAtLeast(0))
+            return
+        }
         val choice = session.currentChoice
         resolveJob?.cancel()
         resolveJob = lifecycleScope.launch {
-            when (choice) {
+            when {
                 // a direct source refused the video: go on down the chain, then catch the site's stream
-                in directOrder -> {
+                choice in directOrder -> {
                     session.mode = Mode.RESOLVING
                     for (key in directOrder.dropWhile { it != choice }.drop(1)) if (tryDirect(key)) return@launch
-                    if (!sniff("Ищем другой поток…", SourceChoice.SITE, "Сайт") { it.loadSite(mirror, movie.id) }) showSitePlayer()
+                    sniff("Ищем другой поток…", SourceChoice.SITE, "Сайт") { it.loadSite(mirror, movie.id) }
+                }
+                // a caught stream that does not play here: the page it came from plays it itself
+                sniffedName != null && web != null -> {
+                    log("Поток не воспроизводится в приложении — играет плеер страницы")
+                    pageAsPlayer(sniffedName ?: "Сайт")
+                    web?.resumePage()
                 }
                 else -> {
                     log("Поток не воспроизводится в приложении — открываем плеер сайта")
@@ -794,33 +916,23 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
         session.sheet = null
         if (key == session.currentChoice && session.mode == Mode.NATIVE) return
         saveProgress()
-        val choice = session.choices.firstOrNull { it.key == key } ?: return
+        val choice = session.choices.firstOrNull { it.key == key }
+            ?: if (key == SourceChoice.SITE_PLAYER) SourceChoice(key, "Плеер сайта", "", null) else return
         resolveJob?.cancel()
         resolveJob = lifecycleScope.launch {
             when {
                 key in directOrder -> {
-                    session.mode = Mode.RESOLVING
                     if (!tryDirect(key)) {
                         session.error = "${choice.title} не отдал поток для этого фильма. Выберите другой источник."
                         session.mode = Mode.ERROR
                     }
                 }
                 key == SourceChoice.SITE_PLAYER -> showSitePlayer()
-                key == SourceChoice.SITE ->
-                    if (!sniff("Ловим поток со страницы плеера…", key, "Сайт") { it.loadSite(mirror, movie.id) }) showSitePlayer()
+                key == SourceChoice.SITE -> sniff("Ловим поток со страницы плеера…", key, "Сайт") { it.loadSite(mirror, movie.id) }
                 choice.info != null -> {
+                    val info = choice.info
                     val picker = container.playerSite.pickerHost(mirror, movie.id)
-                    val ok = sniff("${choice.title}: ловим поток…", key, choice.title) { it.loadEmbed(mirror, picker, choice.info.iframeUrl) }
-                    if (!ok) {
-                        log("${choice.title}: показываем его плеер как есть")
-                        native.exo.stop()
-                        session.mode = Mode.WEB
-                        session.subtitle = choice.title
-                        playerView.visibility = View.GONE
-                        webContainer.visibility = View.VISIBLE
-                        web?.setSniffing(false)
-                        web?.loadEmbed(mirror, picker, choice.info.iframeUrl)
-                    }
+                    sniff("${choice.title}: ловим поток…", key, choice.title) { it.loadEmbed(mirror, picker, info.iframeUrl) }
                 }
             }
         }
@@ -878,7 +990,7 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
     /** For players without an episode list in the app: pick the episode/voice in the site's own UI. */
     override fun showSiteOverlay() {
         val w = web ?: return
-        w.setSniffing(true)
+        w.setSniffing(true, shown = true)
         session.webOverlay = true
         native.exo.pause()
         // the site's UI goes between the video and the native chrome
@@ -889,6 +1001,7 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
 
     override fun hideSiteOverlay() {
         session.webOverlay = false
+        web?.setSniffing(false)
         web?.muteAll()
         root.removeView(webContainer)
         root.addView(webContainer, 0, matchParent())
@@ -915,12 +1028,19 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
         if (session.webOverlay && session.mode == Mode.NATIVE) {
             saveProgress()
             hideSiteOverlay()
-            web?.muteAll()
             playSniffed(stream, sniffedName ?: "Сайт")
         }
     }
 
-    override fun onSources(items: List<String>, selected: Int) = Unit
+    /** The site's picker chose a player the app does not offer (VeoVeo): another one is picked. */
+    override fun onSources(items: List<String>, selected: Int) {
+        val current = items.getOrNull(selected) ?: return
+        if (!SourceInfo.isExcluded(current)) return
+        val other = items.indexOfFirst { !SourceInfo.isExcluded(it) }
+        if (other < 0) return
+        log("Сайт выбрал $current — переключаем на ${items[other]}")
+        web?.selectSource(other)
+    }
 
     override fun onPlayingChanged(playing: Boolean) {
         // the hidden page must never play over the native player
@@ -980,13 +1100,18 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
     }
 
     override fun onRendererGone() {
+        val wasSniffing = sniffWaiter != null
+        sniffWaiter = null
         web?.let { old ->
             webContainer.removeView(old.view)
             runCatching { old.destroy() }
         }
         web = null
         log("Веб-движок перезапущен")
-        if (session.mode == Mode.WEB) showSitePlayer()
+        if (session.mode == Mode.WEB || wasSniffing) {
+            resolveJob?.cancel()
+            showSitePlayer()
+        }
     }
 
     private val loggedBlocked = HashSet<String>()

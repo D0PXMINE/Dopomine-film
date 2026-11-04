@@ -24,19 +24,22 @@ import android.webkit.WebViewClient
 import androidx.core.graphics.createBitmap
 import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.ScriptHandler
+import androidx.webkit.UserAgentMetadata
 import androidx.webkit.WebMessageCompat
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.dopomine.film.player.resolve.Stream
+import com.dopomine.film.player.resolve.StreamFormat
 import org.json.JSONObject
 
 /**
  * The player site in a WebView. Two jobs:
- *  - sniffing: the page runs hidden behind the native player and we catch the stream address
- *    its player requests (HLS/DASH/MP4), with the headers it used, then ExoPlayer plays it;
- *  - fallback: if no stream can be caught, the page itself is shown, reduced to the bare player,
- *    with ads, popups and redirects blocked.
+ *  - sniffing: the page runs (hidden behind the loading screen, or shown so the viewer can press
+ *    play) and we catch the stream address its player requests (HLS/DASH/MP4), with the headers
+ *    it used, then ExoPlayer plays it;
+ *  - fallback: if no stream can be caught, the page itself is the player, reduced to the bare
+ *    player, with ads, popups and redirects blocked.
  */
 class WebPlayer(
     private val context: Context,
@@ -58,9 +61,11 @@ class WebPlayer(
     }
 
     private val main = Handler(Looper.getMainLooper())
-    private var sniffHandler: ScriptHandler? = null
+    private var stateHandler: ScriptHandler? = null
     private var sourcesProxy: JavaScriptReplyProxy? = null
     private var videoProxy: JavaScriptReplyProxy? = null
+    /** Every frame that has spoken: commands go to all of them (the player is often a nested iframe). */
+    private val frames = LinkedHashSet<JavaScriptReplyProxy>()
     private var playerHost: String = ""
     private var pickerHost: String = ""
 
@@ -69,7 +74,10 @@ class WebPlayer(
     @Volatile var manifestsOnly = false
     @Volatile var sniffing = false
         private set
+    private var visible = false
+    private var silent = false
     private val reported: MutableSet<String> = java.util.Collections.synchronizedSet(HashSet())
+    private val rejected: MutableSet<String> = java.util.Collections.synchronizedSet(HashSet())
 
     @SuppressLint("SetJavaScriptEnabled", "RestrictedApi")
     val view: WebView = WebView(context).apply {
@@ -93,6 +101,7 @@ class WebPlayer(
             allowContentAccess = false
             userAgentString = userAgentString.replace("; wv", "").replace(Regex("\\s*Version/\\d+(\\.\\d+)*"), "")
         }
+        presentAsChrome(settings)
         // Streaming mirrors often sit on Safe Browsing lists; the interstitial would replace the player.
         if (WebViewFeature.isFeatureSupported(WebViewFeature.SAFE_BROWSING_ENABLE)) {
             WebSettingsCompat.setSafeBrowsingEnabled(settings, false)
@@ -113,6 +122,7 @@ class WebPlayer(
 
     private val bridge = WebViewCompat.WebMessageListener { _: WebView, message: WebMessageCompat, _: Uri, _: Boolean, reply: JavaScriptReplyProxy ->
         val json = message.data?.let { runCatching { JSONObject(it) }.getOrNull() } ?: return@WebMessageListener
+        remember(reply)
         when (json.optString("type")) {
             "sources" -> {
                 val items = json.optJSONArray("items") ?: return@WebMessageListener
@@ -127,8 +137,22 @@ class WebPlayer(
                 videoProxy = reply
                 val url = json.optString("url")
                 val referer = json.optString("referer")
+                // a manifest recognised by its content may have no telling extension
+                val format = when (json.optString("kind")) {
+                    "hls" -> StreamFormat.HLS
+                    "dash" -> StreamFormat.DASH
+                    else -> null
+                }
                 if (url.startsWith("http")) {
-                    caught(url, buildMap { if (referer.startsWith("http")) put("Referer", referer) })
+                    val headers = buildMap {
+                        if (referer.startsWith("http")) {
+                            put("Referer", referer)
+                            // a script's request to another site carries the page's origin
+                            val from = Uri.parse(referer)
+                            if (format != null && from.authority != Uri.parse(url).authority) put("Origin", "${from.scheme}://${from.authority}")
+                        }
+                    }
+                    caught(url, headers, format)
                 }
             }
             "state", "video", "progress" -> {
@@ -166,26 +190,44 @@ class WebPlayer(
         runCatching { WebViewCompat.addDocumentStartJavaScript(view, asset("player/frames.js"), setOf("*")) }
     }
 
-    /** Sniff mode must be decided before a page loads: the flag is read by frames.js at document start. */
-    fun setSniffing(value: Boolean) {
+    /**
+     * Sniff mode: the page is run to catch its stream. [shown]: the viewer sees it (no forced
+     * silence, no automatic clicks). The flags reach frames already open by message and frames
+     * opened later at document start.
+     */
+    fun setSniffing(value: Boolean, shown: Boolean = false) {
+        if (value && !sniffing) reported.clear()
         sniffing = value
-        reported.clear()
+        visible = shown
+        applyState()
+    }
+
+    /** A caught address that turned out to be an ad: never offered again for this page. */
+    fun reject(url: String) {
+        rejected += url.substringBefore('?')
+    }
+
+    /** Everything caught on this page so far belongs to an ad. */
+    fun rejectCaught() {
+        synchronized(reported) { rejected += reported }
+    }
+
+    private fun applyState() {
+        broadcast("""{"cmd":"mode","sniff":$sniffing,"visible":$visible}""")
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) return
-        sniffHandler?.remove()
-        sniffHandler = null
-        if (value) {
-            sniffHandler = runCatching {
-                WebViewCompat.addDocumentStartJavaScript(view, "window.__dpmSniff = true;", setOf("*"))
-            }.getOrNull()
-        }
+        stateHandler?.remove()
+        stateHandler = runCatching {
+            WebViewCompat.addDocumentStartJavaScript(
+                view, "window.__dpmSniff = $sniffing; window.__dpmVisible = $visible; window.__dpmSilent = $silent;", setOf("*"),
+            )
+        }.getOrNull()
     }
 
     /** The page from the userscript: `<mirror>/<id>`. */
     fun loadSite(mirror: String, kp: Int) {
         playerHost = Uri.parse(mirror).host.orEmpty()
         installScripts(mirror)
-        sourcesProxy = null
-        videoProxy = null
+        forgetFrames()
         listener.onLog("Страница плеера: $mirror/$kp")
         view.loadUrl("$mirror/$kp")
     }
@@ -198,8 +240,7 @@ class WebPlayer(
         playerHost = Uri.parse(mirror).host.orEmpty()
         pickerHost = picker
         installScripts(mirror)
-        sourcesProxy = null
-        videoProxy = null
+        forgetFrames()
         listener.onLog("Плеер напрямую: $iframeUrl")
         val safe = iframeUrl.replace("&", "&amp;").replace("\"", "&quot;")
         val html = """<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -212,19 +253,31 @@ class WebPlayer(
         post(sourcesProxy, """{"cmd":"source","index":$index}""")
     }
 
-    /** Silences the hidden page once its stream has been taken over by the native player. */
+    /** Silences the page once its stream has been taken over by the native player. */
     fun muteAll() {
-        post(videoProxy, """{"cmd":"mute"}""")
+        silent = true
+        applyState()
+        broadcast("""{"cmd":"mute"}""")
         view.evaluateJavascript("document.querySelectorAll('video').forEach(function(v){v.muted=true;v.pause()})", null)
     }
 
-    fun pausePage() = post(videoProxy, """{"cmd":"pause"}""")
+    /** The page is the player again (its stream could not be played natively): sound back on. */
+    fun release() {
+        silent = false
+        applyState()
+        broadcast("""{"cmd":"release"}""")
+    }
+
+    /** Resumes the page's video (an ad was caught instead of the film: the page must go on to the film). */
+    fun resumePage() = broadcast("""{"cmd":"play"}""")
+
+    fun pausePage() = broadcast("""{"cmd":"pause"}""")
 
     fun onResume() = view.onResume()
     fun onPause() = view.onPause()
 
     fun destroy() {
-        sniffHandler?.remove()
+        stateHandler?.remove()
         view.stopLoading()
         (view.parent as? android.view.ViewGroup)?.removeView(view)
         view.removeAllViews()
@@ -237,6 +290,47 @@ class WebPlayer(
     private fun post(proxy: JavaScriptReplyProxy?, json: String) {
         if (proxy == null || !WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) return
         runCatching { proxy.postMessage(json) }
+    }
+
+    private fun broadcast(json: String) {
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) return
+        frames.toList().forEach { proxy -> runCatching { proxy.postMessage(json) }.onFailure { frames.remove(proxy) } }
+    }
+
+    private fun remember(proxy: JavaScriptReplyProxy) {
+        if (frames.add(proxy) && frames.size > MAX_FRAMES) frames.remove(frames.first())
+    }
+
+    /** A new page: no frames, nothing caught or rejected yet, sound allowed. */
+    private fun forgetFrames() {
+        frames.clear()
+        sourcesProxy = null
+        videoProxy = null
+        rejected.clear()
+        silent = false
+        applyState()
+    }
+
+    /**
+     * Client hints of a WebView name it ("Android WebView"), and some players' bot checks turn such
+     * visitors away; the page is told it runs in Chrome of the same version instead.
+     */
+    private fun presentAsChrome(settings: WebSettings) {
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.USER_AGENT_METADATA)) return
+        runCatching {
+            val full = Regex("""Chrome/([\d.]+)""").find(settings.userAgentString)?.groupValues?.get(1) ?: return
+            val major = full.substringBefore('.')
+            fun brand(name: String, version: String, fullVersion: String) =
+                UserAgentMetadata.BrandVersion.Builder().setBrand(name).setMajorVersion(version).setFullVersion(fullVersion).build()
+            val current = WebSettingsCompat.getUserAgentMetadata(settings)
+            WebSettingsCompat.setUserAgentMetadata(
+                settings,
+                UserAgentMetadata.Builder(current)
+                    .setBrandVersionList(listOf(brand("Chromium", major, full), brand("Google Chrome", major, full), brand("Not)A;Brand", "99", "99.0.0.0")))
+                    .setFullVersion(full)
+                    .build(),
+            )
+        }
     }
 
     private fun asset(path: String): String = context.assets.open(path).bufferedReader().use { it.readText() }
@@ -253,10 +347,11 @@ class WebPlayer(
         return host == domain || host.endsWith(".$domain")
     }
 
-    private fun caught(url: String, headers: Map<String, String>) {
-        if (!sniffing || !reported.add(url.substringBefore('?'))) return
-        val format = Stream.formatOf(url)
-        if (manifestsOnly && format == com.dopomine.film.player.resolve.StreamFormat.PROGRESSIVE) return
+    private fun caught(url: String, headers: Map<String, String>, known: StreamFormat? = null) {
+        val key = url.substringBefore('?')
+        if (!sniffing || key in rejected || looksLikeAd(url) || !reported.add(key)) return
+        val format = known ?: Stream.formatOf(url)
+        if (manifestsOnly && format == StreamFormat.PROGRESSIVE) return
         val cookies = CookieManager.getInstance().getCookie(url)
         val all = buildMap {
             headers.forEach { (k, v) ->
@@ -272,10 +367,22 @@ class WebPlayer(
         }
     }
 
+    /** Pre-roll and banner videos that slipped past the block list. */
+    private fun looksLikeAd(url: String): Boolean {
+        val uri = Uri.parse(url)
+        if (adBlocker.shouldBlock(uri)) return true
+        return AD_PATH.containsMatchIn(uri.path.orEmpty())
+    }
+
     private fun looksLikeStream(url: String): Boolean {
         val path = url.substringBefore('?').lowercase()
         return path.endsWith(".m3u8") || path.endsWith(".mpd") || path.contains(".m3u8/") ||
             (!manifestsOnly && path.endsWith(".mp4") && !path.contains("preview") && !path.contains("trailer"))
+    }
+
+    private companion object {
+        const val MAX_FRAMES = 24
+        val AD_PATH = Regex("""(^|[/._-])(ads?|adv|vast|vpaid|preroll|midroll|reklama|creatives?)([/._-]|$)""", RegexOption.IGNORE_CASE)
     }
 
     private inner class Client : WebViewClient() {

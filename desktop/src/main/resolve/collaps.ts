@@ -1,10 +1,12 @@
-import type { Episode, Playable, Season, Subtitle } from "../../shared/types";
+import type { Episode, Playable, Season, Stream, Subtitle } from "../../shared/types";
 import { fetchText, HttpError } from "../net";
 import { int, Log, ResolveError, str, stream } from "./common";
 
 /**
  * Collaps: its embed page carries the stream config in plain sight (HLS/DASH links, voice-over
  * names, subtitles, seasons), which is what the site's actualize.js writes into its iframe.
+ * Its HLS stops at 720p; the DASH manifest of the same video goes up to 1080p, so DASH is
+ * played first and HLS is kept as the fallback.
  */
 const ACTUALIZE_JS = "https://kodir2.github.io/actualize.js";
 const FALLBACK_HOST = "https://api.luxembd.ws";
@@ -68,18 +70,19 @@ export function parseCollaps(html: string, headers: Record<string, string>): Pla
   }
   const at = html.indexOf("makePlayer({");
   const config = at >= 0 ? html.slice(at + "makePlayer({".length) : html;
-  const hls = stringValue(config, "hls");
-  const dash = stringValue(config, "dash") ?? stringValue(config, "dasha");
-  const url = hls ?? dash;
-  if (!url) {
+  const s = withFallback(stringValue(config, "hls"), stringValue(config, "dasha") ?? stringValue(config, "dash"), { headers, audioNames: audioNames(config), subtitles: subtitles(config) });
+  if (!s) {
     if (html.includes("недоступно") || html.toLowerCase().includes("unavailable")) throw new ResolveError("Collaps: видео недоступно в этом регионе");
     throw new ResolveError("Collaps: ссылка на видео не найдена");
   }
-  return {
-    kind: "single",
-    sourceName: "Collaps",
-    stream: stream(absolute(url), hls ? "HLS" : "DASH", { headers, audioNames: audioNames(config), subtitles: subtitles(config) }),
-  };
+  return { kind: "single", sourceName: "Collaps", stream: s };
+}
+
+/** DASH (up to 1080p) with HLS (up to 720p) behind it; either alone if only one is given. */
+function withFallback(hls: string | null, dash: string | null, extra: Partial<Stream>): Stream | null {
+  const viaHls = hls ? stream(absolute(hls), "HLS", extra) : null;
+  if (!dash) return viaHls;
+  return stream(absolute(dash), "DASH", { ...extra, ...(viaHls ? { fallback: viaHls } : {}) });
 }
 
 function parseSeasons(raw: string, headers: Record<string, string>): Season[] {
@@ -91,17 +94,15 @@ function parseSeasons(raw: string, headers: Record<string, string>): Season[] {
     const list = (so as { episodes?: unknown[] }).episodes ?? [];
     const episodes = list.flatMap((eo, ei): Episode[] => {
       if (!eo || typeof eo != "object") return [];
-      const hls = str(eo, "hls") ?? str(eo, "file");
-      const dash = str(eo, "dasha") ?? str(eo, "dash");
-      const link = hls ?? dash;
-      if (!link) return [];
       const names = ((eo as { audio?: { names?: unknown[] } }).audio?.names ?? []).filter((x): x is string => typeof x == "string");
       const cc = (eo as { cc?: unknown[] }).cc;
+      const s = withFallback(str(eo, "hls") ?? str(eo, "file"), str(eo, "dasha") ?? str(eo, "dash"), { headers, audioNames: names, subtitles: Array.isArray(cc) ? subtitleList(cc) : [] });
+      if (!s) return [];
       return [{
         season: number,
         number: int(eo, "episode") ?? int(eo, "number") ?? ei + 1,
         title: str(eo, "title") ?? str(eo, "name"),
-        stream: stream(absolute(link), hls ? "HLS" : "DASH", { headers, audioNames: names, subtitles: Array.isArray(cc) ? subtitleList(cc) : [] }),
+        stream: s,
       }];
     }).sort((a, b) => a.number - b.number);
     return episodes.length ? [{ number, episodes }] : [];
@@ -183,27 +184,30 @@ function quoteKeys(raw: string): string {
   let out = "";
   let quote: string | null = null;
   let i = 0;
-  const lastSignificant = () => out.trimEnd().slice(-1);
+  // the last non-blank character written outside strings: a key can only follow '{' or ','
+  let last = " ";
   while (i < raw.length) {
     const c = raw[i];
     if (quote) {
       if (c == "\\") { out += c + (raw[i + 1] ?? ""); i += 2; continue; }
-      if (c == quote) { out += '"'; quote = null; }
+      if (c == quote) { out += '"'; quote = null; last = '"'; }
       else if (c == '"') out += '\\"';
       else out += c;
       i++;
       continue;
     }
     if (c == '"' || c == "'") { quote = c; out += '"'; i++; continue; }
-    if (/[A-Za-z_]/.test(c) && (lastSignificant() == "{" || lastSignificant() == ",")) {
+    if (/[A-Za-z_]/.test(c) && (last == "{" || last == ",")) {
       const start = i;
       while (i < raw.length && /[A-Za-z0-9_]/.test(raw[i])) i++;
       let j = i;
       while (j < raw.length && /\s/.test(raw[j])) j++;
       out += raw[j] == ":" ? `"${raw.slice(start, i)}"` : raw.slice(start, i);
+      last = raw[i - 1];
       continue;
     }
     out += c;
+    if (!/\s/.test(c)) last = c;
     i++;
   }
   // trailing commas are not JSON either

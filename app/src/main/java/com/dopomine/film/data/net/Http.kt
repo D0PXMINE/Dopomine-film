@@ -1,5 +1,6 @@
 package com.dopomine.film.data.net
 
+import com.dopomine.film.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -20,15 +21,46 @@ import kotlin.coroutines.resumeWithException
 const val BROWSER_UA =
     "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
 
+/** How the app names itself to open APIs that ask clients to (with a way to reach the author). */
+const val APP_UA = "Dopomine/${BuildConfig.VERSION_NAME} (https://github.com/D0PXMINE/Dopomine-film) okhttp/4.12.0"
+
 object Http {
     /** @param interceptor lets tests answer requests without the network. */
     fun client(cacheDir: File, interceptor: Interceptor? = null): OkHttpClient = OkHttpClient.Builder()
         .cache(Cache(File(cacheDir, "http"), 30L * 1024 * 1024))
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(25, TimeUnit.SECONDS)
+        .connectTimeout(12, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        // no single request may hold a screen for long, whatever the retries and redirects
+        .callTimeout(30, TimeUnit.SECONDS)
+        .addInterceptor(IdentifyToOpenApis)
         .apply { if (interceptor != null) addInterceptor(interceptor) }
         .addNetworkInterceptor(CacheHints)
         .build()
+
+    /**
+     * Wikimedia rate-limits clients that hide who they are (a browser User-Agent from an app counts
+     * as "unidentified": 10 requests a minute per address, shared by everyone behind a mobile
+     * operator's NAT), so descriptions stopped loading. Named clients get 200 a minute.
+     * Shikimori asks the same of API users.
+     */
+    private object IdentifyToOpenApis : Interceptor {
+        override fun intercept(chain: Interceptor.Chain): Response {
+            val request = chain.request()
+            if (!wantsAppName(request.url.host)) return chain.proceed(request)
+            val named = request.newBuilder().header("User-Agent", APP_UA).build()
+            val response = chain.proceed(named)
+            // a short pause is worth one more try; a long one is not
+            val wait = response.header("Retry-After")?.toLongOrNull()
+            if (response.code != 429 || wait == null || wait > 2) return response
+            response.close()
+            Thread.sleep(wait.coerceAtLeast(1) * 1000)
+            return chain.proceed(named)
+        }
+
+        private fun wantsAppName(host: String) =
+            host.endsWith("wikipedia.org") || host.endsWith("wikidata.org") || host.endsWith("wikimedia.org") ||
+                host.startsWith("shikimori.") || host == "api.aniskip.com"
+    }
 
     /** Metadata changes slowly; caching it saves traffic and makes screens instant on revisit. */
     private object CacheHints : Interceptor {
@@ -41,6 +73,7 @@ object Http {
                 host == "rating.kinopoisk.ru" -> TimeUnit.HOURS.toSeconds(12)
                 host.endsWith("wikipedia.org") -> TimeUnit.DAYS.toSeconds(7)
                 host == "query.wikidata.org" -> TimeUnit.DAYS.toSeconds(3)
+                host.startsWith("shikimori.") -> TimeUnit.DAYS.toSeconds(7)
                 // intro timestamps change rarely
                 host == "api.introdb.app" || host == "api.theintrodb.org" || host == "api.aniskip.com" -> TimeUnit.DAYS.toSeconds(3)
                 else -> return response

@@ -241,12 +241,18 @@ class NativePlayer(context: Context, private val http: OkHttpClient) {
         val video = mutableListOf<Pair<Int, TrackOption>>()
         val text = mutableListOf<TrackOption>()
         var audioOrdinal = 0
+        var hiddenSelected = false
         tracks.groups.forEachIndexed { gi, group ->
             when (group.type) {
                 C.TRACK_TYPE_AUDIO -> {
-                    // HLS voice-overs are separate renditions: one group each
+                    // HLS/DASH voice-overs are separate renditions: one group each
+                    val hidden = isRemovedVoice(audioOrdinal)
                     for (ti in 0 until group.length) {
                         if (!group.isTrackSupported(ti)) continue
+                        if (hidden) {
+                            hiddenSelected = hiddenSelected || group.isTrackSelected(ti)
+                            continue
+                        }
                         val f = group.getTrackFormat(ti)
                         val label = labelFor(C.TRACK_TYPE_AUDIO, f, audioOrdinal)
                         audio += TrackOption("$gi:$ti", label, f.channelCount.takeIf { it > 2 }?.let { "$it.1" }, group.isTrackSelected(ti))
@@ -288,7 +294,17 @@ class NativePlayer(context: Context, private val http: OkHttpClient) {
         val wanted = preferredVoice
         if (wanted != null && named.size > 1 && named.none { it.selected && it.label == wanted }) {
             named.firstOrNull { it.label == wanted }?.let { select(C.TRACK_TYPE_AUDIO, it.key) }
+        } else if (hiddenSelected && named.none { it.selected }) {
+            // the player started on a rendition the source marks as removed
+            named.firstOrNull()?.let { select(C.TRACK_TYPE_AUDIO, it.key) }
         }
+    }
+
+    /** Collaps names renditions it no longer offers "delete"; they are left out of the menu. */
+    private fun isRemovedVoice(ordinal: Int): Boolean {
+        val names = stream?.audioNames.orEmpty()
+        return names.getOrNull(ordinal)?.trim()?.equals("delete", ignoreCase = true) == true &&
+            names.any { !it.trim().equals("delete", ignoreCase = true) }
     }
 
     private fun describe(e: PlaybackException): String = when (e.errorCode) {

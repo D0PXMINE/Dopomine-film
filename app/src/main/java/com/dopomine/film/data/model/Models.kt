@@ -52,13 +52,12 @@ data class Movie(
 @Immutable
 data class Ratings(val kp: Double?, val kpVotes: Int, val imdb: Double?, val imdbVotes: Int)
 
+/** A description and where it comes from ("Википедии", "Shikimori": shown as "по материалам …"). */
 @Immutable
-data class MovieDetails(
-    val movie: Movie,
-    val description: String? = null,
-    val directors: List<String> = emptyList(),
-    val cast: List<String> = emptyList(),
-)
+data class Description(val text: String, val source: String)
+
+@Immutable
+data class People(val directors: List<String> = emptyList(), val cast: List<String> = emptyList())
 
 @Immutable
 data class PagedMovies(val items: List<Movie>, val page: Int, val hasMore: Boolean)

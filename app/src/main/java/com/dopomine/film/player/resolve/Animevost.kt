@@ -2,6 +2,9 @@ package com.dopomine.film.player.resolve
 
 import com.dopomine.film.data.model.Movie
 import com.dopomine.film.data.net.postForm
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -64,9 +67,12 @@ class AnimevostResolver(private val http: OkHttpClient) {
         val tv = mine.filter { it.isTv }.sortedWith(compareBy({ it.year ?: 9999 }, { it.id }))
         if (tv.isEmpty() || !AnimeTitles.yearFits(movie, tv.first().year)) throw ResolveException("AnimeVost: этого аниме у них нет")
         log("AnimeVost: сезоны " + tv.joinToString { "«${it.ru ?: it.en}»" })
-        val seasons = tv.take(MAX_SEASONS).mapIndexedNotNull { index, r ->
-            runCatching { Season(index + 1, playlist(api, r.id, index + 1)) }.getOrNull()?.takeIf { it.episodes.isNotEmpty() }
-        }
+        // the playlists are fetched side by side: a long show is no slower than a short one
+        val seasons = coroutineScope {
+            tv.take(MAX_SEASONS).mapIndexed { index, r ->
+                async { runCatching { Season(index + 1, playlist(api, r.id, index + 1)) }.getOrNull()?.takeIf { it.episodes.isNotEmpty() } }
+            }.awaitAll()
+        }.filterNotNull()
         if (seasons.isEmpty()) throw ResolveException("AnimeVost: нет серий")
         return Playable.Series(NAME, seasons.mapIndexed { i, s -> Season(i + 1, s.episodes.map { it.copy(season = i + 1) }) })
     }

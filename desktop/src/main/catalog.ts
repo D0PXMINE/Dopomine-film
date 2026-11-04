@@ -154,6 +154,23 @@ function meta(d: Database, key: string): string | null {
 }
 
 /** Version of a catalog file this app can read, or null. */
+/**
+ * Of the [n] most-voted titles in the current catalog, the share that still has ratings in
+ * [file]: a snapshot built while Kinopoisk throttled the builder loses them for big titles.
+ */
+async function ratedShare(file: string, n = 1000): Promise<number> {
+  const current = await database();
+  const top = (current.exec(`SELECT kp FROM titles ORDER BY kp_votes DESC LIMIT ${n}`)[0]?.values ?? []).map(r => Number(r[0]));
+  if (top.length == 0) return 1;
+  const d = new (await sql()).Database(fs.readFileSync(file));
+  try {
+    const rated = Number(d.exec(`SELECT COUNT(*) FROM titles WHERE kp_votes > 0 AND kp IN (${top.join(",")})`)[0]?.values[0]?.[0] ?? 0);
+    return rated / top.length;
+  } finally {
+    d.close();
+  }
+}
+
 async function versionOf(file: string): Promise<string | null> {
   if (!fs.existsSync(file)) return null;
   try {
@@ -288,9 +305,49 @@ async function ratings(id: number) {
 /** Russian Wikipedia: the lead section of the article is a good description. */
 async function wikiSummary(article: string): Promise<string | null> {
   const p = encodeURIComponent(article.replace(/ /g, "_"));
-  const obj = await fetchJson<{ extract?: string }>(`https://ru.wikipedia.org/api/rest_v1/page/summary/${p}`).catch(() => null);
+  let status = 0;
+  const obj = await fetchJson<{ extract?: string }>(`https://ru.wikipedia.org/api/rest_v1/page/summary/${p}`, {}, 12_000)
+    .catch(e => { status = (e as { status?: number }).status ?? 0; return null; });
   const text = obj?.extract?.trim();
+  if (text && text.length > 40) return text;
+  // over the rate limit the Action API answers no better; anything else is worth a second door
+  return status == 429 ? null : wikiExtract(article);
+}
+
+/** The same lead through the Action API (`prop=extracts`). */
+async function wikiExtract(article: string): Promise<string | null> {
+  const url = "https://ru.wikipedia.org/w/api.php?action=query&format=json&formatversion=2&prop=extracts&exintro=1&explaintext=1&redirects=1&titles=" +
+    encodeURIComponent(article);
+  const r = await fetchJson<{ query?: { pages?: { extract?: string }[] } }>(url, {}, 12_000).catch(() => null);
+  const text = r?.query?.pages?.[0]?.extract?.trim();
   return text && text.length > 40 ? text : null;
+}
+
+/** Shikimori: Russian synopses of anime, by MyAnimeList ID (the site moved from .one to .io). */
+async function shikimori(mal: number): Promise<string | null> {
+  for (const host of ["shikimori.io", "shikimori.one"]) {
+    try {
+      const r = await fetchJson<{ description?: string | null }>(`https://${host}/api/animes/${mal}`, {}, 12_000);
+      return r.description ? cleanShikimori(r.description) : null;
+    } catch (e) {
+      if ((e as { status?: number }).status == 404) return null;
+    }
+  }
+  return null;
+}
+
+/** Shikimori's markup ("[character=1]Имя[/character]", "[[Имя]]", "Рюк [リューク]") to plain text. */
+export function cleanShikimori(raw: string): string | null {
+  let text = raw;
+  for (let i = 0; i < 3; i++) text = text.replace(/\[(\w+)=[^\]\n]*\]([\s\S]*?)\[\/\1\]/g, "$2");
+  text = text
+    .replace(/\[\[(?:[^\]|\n]*\|)?([^\]\n]*)\]\]/g, "$1")
+    .replace(/\s*\[[^\]\n]*[\u3040-\u30ff\u3400-\u9fff][^\]\n]*\]/g, "")
+    .replace(/\[\/?[a-z_]+(?:=[^\]\n]*)?\]/g, "")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\s*\n\s*/g, "\n")
+    .trim();
+  return text.length > 40 ? text : null;
 }
 
 type Binding = Record<string, { value: string } | undefined>;
@@ -383,25 +440,40 @@ export async function movie(id: number): Promise<Movie> {
 
 const detailsMemo = new Memo<MovieDetails>(6 * 3600_000, 64);
 
+/** At most [ms] for a part of the details: a slow source must not hold the others up. */
+const atMost = <T>(p: Promise<T>, ms: number, fallback: T): Promise<T> =>
+  Promise.race([p.catch(() => fallback), new Promise<T>(r => setTimeout(() => r(fallback), ms))]);
+
+/** A description in Russian: Shikimori's synopsis for anime, else the lead of the Wikipedia article. */
+async function description(base: Movie): Promise<{ text: string; source: string } | null> {
+  if (base.malId != null) {
+    const anime = await shikimori(base.malId);
+    if (anime) return { text: anime, source: "Shikimori" };
+  }
+  // the catalog already says when a title has no article; only titles it lacks are looked up
+  const known = await byId(base.id).catch(() => null);
+  const article = base.wiki ?? (base.title.startsWith("Кинопоиск #") || known ? null : (await wikidataMovie(base.id).catch(() => null))?.wiki);
+  const text = article ? await wikiSummary(article) : null;
+  return text ? { text, source: "Википедии" } : null;
+}
+
 export async function details(id: number): Promise<MovieDetails> {
   const hit = detailsMemo.get(String(id));
   if (hit) return hit;
   const base = await movie(id);
   const [r, cast, text] = await Promise.all([
-    ratings(id),
-    people(id).catch(() => [[], []] as [string[], string[]]),
-    (async () => {
-      const article = base.wiki ?? (base.title.startsWith("Кинопоиск #") ? null : (await wikidataMovie(id).catch(() => null))?.wiki);
-      return article ? wikiSummary(article) : null;
-    })(),
+    atMost(ratings(id), 10_000, null),
+    atMost(people(id), 15_000, [[], []] as [string[], string[]]),
+    atMost(description(base), 20_000, null),
   ]);
   const m = r ? {
     ...base,
     ratingKp: r.kp ?? base.ratingKp, votesKp: Math.max(r.kpVotes, base.votesKp),
     ratingImdb: r.imdb ?? base.ratingImdb, votesImdb: Math.max(r.imdbVotes, base.votesImdb),
   } : base;
-  const d: MovieDetails = { movie: m, description: text, directors: cast[0], cast: cast[1] };
-  detailsMemo.set(String(id), d);
+  const d: MovieDetails = { movie: m, description: text?.text ?? null, descriptionSource: text?.source ?? null, directors: cast[0], cast: cast[1] };
+  // only complete answers are remembered: a refused request is asked again next time
+  if (text) detailsMemo.set(String(id), d);
   return d;
 }
 
@@ -427,6 +499,11 @@ export async function checkUpdate(): Promise<UpdateResult> {
     if (current && version <= current) {
       fs.rmSync(tmp, { force: true });
       return { kind: "upToDate" };
+    }
+    const share = await ratedShare(tmp);
+    if (share < 0.98) {
+      fs.rmSync(tmp, { force: true });
+      return { kind: "failed", message: `Новый каталог неполный (рейтинги у ${Math.floor(share * 100)}% известных тайтлов) — оставлен текущий` };
     }
     fs.renameSync(tmp, pendingFile());
     return { kind: "staged", version };

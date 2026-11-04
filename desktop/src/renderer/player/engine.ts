@@ -1,4 +1,5 @@
 import Hls, { ErrorData } from "hls.js";
+import { MediaPlayer, type MediaPlayerClass, type MediaInfo } from "dashjs";
 import type { Stream, Variant } from "../../shared/types";
 
 export interface Track {
@@ -38,12 +39,17 @@ function numbered(labels: string[]): string[] {
 
 export type EngineError = { message: string; network: boolean };
 
+/** Collaps names renditions it no longer offers "delete"; they stay out of the menu. */
+const removed = (name: string | undefined) => (name ?? "").trim().toLowerCase() == "delete";
+
 /**
- * The video element plus hls.js: adaptive HLS with its voice-overs, qualities and subtitles, or
- * a plain file. Streams with one file per quality (AniLiberty, AnimeVost) switch files in place.
+ * The video element plus hls.js (adaptive HLS) or dash.js (DASH: Collaps up to 1080p), with
+ * voice-overs, qualities and subtitles, or a plain file. Streams with one file per quality
+ * (AniLiberty, AnimeVost) switch files in place.
  */
 export class Engine {
   private hls: Hls | null = null;
+  private dash: MediaPlayerClass | null = null;
   private stream: Stream | null = null;
   private networkRetries = 0;
   private mediaRecovered = false;
@@ -79,7 +85,7 @@ export class Engine {
     }
 
     if (stream.format == "DASH") {
-      this.onError({ message: "Источник отдал DASH, а здесь нужен HLS", network: false });
+      this.loadDash(stream, startSec, autoplay);
       return;
     }
     if (stream.format == "HLS" && Hls.isSupported()) {
@@ -119,6 +125,28 @@ export class Engine {
     }
   }
 
+  private loadDash(stream: Stream, startSec: number, autoplay: boolean) {
+    const dash = MediaPlayer().create();
+    this.dash = dash;
+    dash.updateSettings({
+      debug: { logLevel: 0 },
+      streaming: { buffer: { fastSwitchEnabled: true }, abr: { autoSwitchBitrate: { video: true } } },
+    });
+    const events = MediaPlayer.events;
+    dash.on(events.STREAM_INITIALIZED, () => {
+      this.applyPreferredVoice();
+      this.onChange();
+    });
+    for (const ev of [events.QUALITY_CHANGE_RENDERED, events.TRACK_CHANGE_RENDERED, events.PLAYBACK_METADATA_LOADED]) dash.on(ev, () => this.onChange());
+    dash.on(events.ERROR, (e: { error?: { code?: number; message?: string } | string }) => {
+      const err = typeof e.error == "object" ? e.error : { message: e.error };
+      // 25: download error of a manifest or segment (network or refused)
+      const network = err?.code != null && err.code >= 25 && err.code <= 28;
+      this.onError({ message: network ? "Нет соединения с источником" : `Видео не воспроизводится (${err?.message ?? "DASH"})`, network });
+    });
+    dash.initialize(this.video, stream.url, autoplay, startSec > 0 ? startSec : undefined);
+  }
+
   private handleHlsError(data: ErrorData) {
     if (!data.fatal || !this.hls) return;
     if (data.type == Hls.ErrorTypes.NETWORK_ERROR && this.networkRetries < 2) {
@@ -142,6 +170,10 @@ export class Engine {
   destroy() {
     this.hls?.destroy();
     this.hls = null;
+    if (this.dash) {
+      try { this.dash.destroy(); } catch { /* already torn down */ }
+      this.dash = null;
+    }
     this.video.onerror = null;
     this.video.removeAttribute("src");
     this.video.load();
@@ -149,26 +181,51 @@ export class Engine {
 
   // ---- voice-overs ----------------------------------------------------------------------------
 
+  private dashAudio(): MediaInfo[] {
+    try {
+      return this.dash?.getTracksFor("audio") ?? [];
+    } catch {
+      return [];
+    }
+  }
+
   audioTracks(): Track[] {
+    const names = this.stream?.audioNames ?? [];
+    const keepAll = names.length > 0 && names.every(removed);
     const hls = this.hls;
-    if (!hls || hls.audioTracks.length < 2) return [];
-    const labels = numbered(hls.audioTracks.map((t, i) => cleanName(this.stream?.audioNames[i] || t.name || t.lang || `Дорожка ${i + 1}`)));
-    return hls.audioTracks.map((t, i) => ({ key: String(i), label: labels[i], detail: t.channels && Number(t.channels) > 2 ? `${t.channels}` : undefined, selected: hls.audioTrack == i }));
+    if (hls) {
+      if (hls.audioTracks.length < 2) return [];
+      const labels = numbered(hls.audioTracks.map((t, i) => cleanName(names[i] || t.name || t.lang || `Дорожка ${i + 1}`)));
+      return hls.audioTracks
+        .map((t, i) => ({ key: String(i), label: labels[i], detail: t.channels && Number(t.channels) > 2 ? `${t.channels}` : undefined, selected: hls.audioTrack == i }))
+        .filter((_, i) => keepAll || !removed(names[i]));
+    }
+    const tracks = this.dashAudio();
+    if (tracks.length < 2 || !this.dash) return [];
+    const current = this.dash.getCurrentTrackFor("audio");
+    const labels = numbered(tracks.map((t, i) => cleanName(names[i] || t.labels?.[0]?.text || t.lang || `Дорожка ${i + 1}`)));
+    return tracks
+      .map((t, i) => ({ key: String(i), label: labels[i], selected: current != null && (current.id == t.id && current.index == t.index) }))
+      .filter((_, i) => keepAll || !removed(names[i]));
   }
 
   setAudio(key: string): string | null {
-    if (!this.hls) return null;
     const track = this.audioTracks().find(t => t.key == key);
-    this.hls.audioTrack = Number(key);
+    if (this.hls) this.hls.audioTrack = Number(key);
+    else if (this.dash) {
+      const info = this.dashAudio()[Number(key)];
+      if (!info) return null;
+      this.dash.setCurrentTrack(info);
+    } else return null;
     if (track) this.preferredVoice = track.label;
     return track?.label ?? null;
   }
 
-  /** Keeps the voice-over the viewer picked when the next episode starts. */
+  /** Keeps the voice-over the viewer picked when the next episode starts (and skips removed ones). */
   private applyPreferredVoice() {
-    if (!this.preferredVoice) return;
-    const track = this.audioTracks().find(t => t.label == this.preferredVoice);
-    if (track && !track.selected && this.hls) this.hls.audioTrack = Number(track.key);
+    const tracks = this.audioTracks();
+    const wanted = (this.preferredVoice && tracks.find(t => t.label == this.preferredVoice)) || (tracks.some(t => t.selected) ? null : tracks[0]);
+    if (wanted && !wanted.selected) this.setAudio(wanted.key);
   }
 
   // ---- quality --------------------------------------------------------------------------------
@@ -176,6 +233,23 @@ export class Engine {
   qualities(): Track[] {
     const s = this.stream;
     if (s && s.variants.length > 1) return s.variants.map((v, i) => ({ key: `v:${i}`, label: v.label, selected: v.url == s.url }));
+    const dash = this.dash;
+    if (dash) {
+      let reps: { id: string; width: number; height: number; bandwidth: number }[] = [];
+      try { reps = dash.getRepresentationsByType("video"); } catch { /* not ready */ }
+      if (reps.length < 2) return [];
+      const auto = dash.getSettings().streaming?.abr?.autoSwitchBitrate?.video !== false;
+      const current = dash.getCurrentRepresentationForType("video");
+      const seen = new Set<string>();
+      const levels = reps
+        .map(r => ({ id: r.id, label: qualityName(r.width, r.height), height: r.height, bitrate: r.bandwidth }))
+        .sort((a, b) => b.height - a.height)
+        .filter(l => !seen.has(l.label) && !!seen.add(l.label));
+      return [
+        { key: AUTO, label: "Авто", detail: auto && current ? qualityName(current.width, current.height) : undefined, selected: auto },
+        ...levels.map(l => ({ key: `d:${l.id}`, label: l.label, detail: l.bitrate ? `${(l.bitrate / 1e6).toFixed(1)} Мбит/с` : undefined, selected: !auto && current?.id == l.id })),
+      ];
+    }
     const hls = this.hls;
     if (!hls || hls.levels.length < 2) return [];
     const auto = hls.autoLevelEnabled;
@@ -201,6 +275,13 @@ export class Engine {
         const playing = !this.video.paused;
         this.load({ ...s, url: v.url }, at, playing);
       }
+      return;
+    }
+    if (this.dash) {
+      const auto = key == AUTO;
+      this.dash.updateSettings({ streaming: { abr: { autoSwitchBitrate: { video: auto } } } });
+      if (!auto) this.dash.setRepresentationForTypeById("video", key.slice(2), true);
+      this.onChange();
       return;
     }
     if (!this.hls) return;

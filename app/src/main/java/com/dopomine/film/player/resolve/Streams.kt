@@ -25,6 +25,8 @@ data class Stream(
     val variants: List<Variant> = emptyList(),
     /** Intro / credits marks the source itself publishes for this file (AniLiberty does). */
     val segments: List<Segment> = emptyList(),
+    /** The same video in another form, played if this one fails (Collaps: HLS up to 720p behind DASH up to 1080p). */
+    val fallback: Stream? = null,
 ) {
     fun withVariant(v: Variant) = copy(url = v.url, format = formatOf(v.url))
 
@@ -64,10 +66,14 @@ data class SourceInfo(
     val voices: List<String>,
 ) {
     val isCollaps: Boolean get() = name.equals("Collaps", ignoreCase = true)
-    val isVeoVeo: Boolean get() = name.equals("VeoVeo", ignoreCase = true)
 
     /** Players the app can read directly (no hidden page needed). */
-    val isDirect: Boolean get() = isCollaps || isVeoVeo
+    val isDirect: Boolean get() = isCollaps
+
+    companion object {
+        /** Players the app does not offer at all (VeoVeo: removed at the owner's request). */
+        fun isExcluded(name: String): Boolean = name.contains("veoveo", ignoreCase = true)
+    }
 }
 
 class ResolveException(message: String) : Exception(message)

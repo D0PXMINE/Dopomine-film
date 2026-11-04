@@ -10,10 +10,10 @@
 Установщики собирает GitHub Actions (workflow **Desktop**) и выкладывает в релиз
 [`desktop`](https://github.com/D0PXMINE/Dopomine-film/releases/tag/desktop):
 
-- **Windows** — `Dopomine-Setup-1.0.0.exe` (установщик) или `Dopomine-1.0.0-portable.exe`
+- **Windows** — `Dopomine-Setup-1.1.0.exe` (установщик) или `Dopomine-1.1.0-portable.exe`
   (без установки, просто запустить);
-- **Linux** — `Dopomine-1.0.0.AppImage` или `.deb`;
-- **macOS** — `Dopomine-1.0.0.dmg`: собирается по запросу — Actions → Desktop → Run workflow с галочкой
+- **Linux** — `Dopomine-1.1.0.AppImage` или `.deb`;
+- **macOS** — `Dopomine-1.1.0.dmg`: собирается по запросу — Actions → Desktop → Run workflow с галочкой
   «macOS» (GitHub выделяет машины с macOS не всегда).
 
 Сборки не подписаны сертификатом: Windows SmartScreen покажет «Неизвестный издатель» —
@@ -30,9 +30,11 @@
 - **пропуск заставок** во всём: кнопка «Пропустить заставку / пересказ», «Следующая серия» на
   титрах, **«Автопропуск»** (в плеере и в настройках), отметки заставок на полосе перемотки;
   разметка — от источника, AniSkip, TheIntroDB, IntroDB или своя («Заставка» → «Здесь начинается…»);
-- источники как в Android-версии: AniLiberty и AnimeVost для аниме, VeoVeo, Collaps, остальные
-  плееры сайта (поток ловится со скрытой страницы) и, в крайнем случае, сам плеер сайта — с
-  заблокированной рекламой, всплывающими окнами и переходами на чужие сайты.
+- источники как в Android-версии: AniLiberty и AnimeVost для аниме, Collaps (DASH до 1080p,
+  при сбое — HLS), остальные плееры сайта: поток ловится со скрытой страницы, а если за 12 секунд
+  не появился, страница плеера показывается — нажмите в ней «▶», и приложение подхватит поток;
+  в крайнем случае играет сам плеер сайта — с заблокированной рекламой, всплывающими окнами и
+  переходами на чужие сайты.
 
 ### Клавиши в плеере
 
@@ -60,6 +62,8 @@ npm run dev          # окно с горячей перезагрузкой
 npm run build        # dist/
 npm test             # unit-тесты (node --test)
 xvfb-run -a node test/e2e.mjs [--online] [--site]   # проверка окна через Playwright, с реальными плеерами
+xvfb-run -a node test/catch.mjs   # перехват потока на локальных копиях страниц плееров (нужен ffmpeg)
+node test/frames.mjs              # скрипт страниц плееров (общий с Android) в Chromium
 npm run dist:win     # release/: portable и zip; установщик NSIS собирается на Windows (или в CI)
 npm run dist:linux   # release/: AppImage и deb
 ```

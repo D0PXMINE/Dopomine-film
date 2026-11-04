@@ -280,10 +280,14 @@ def fetch_ratings(work, kps, max_age_days, workers=16):
         except Exception:  # noqa: BLE001 - missing ratings are fine
             return k, None
 
+    def keep(old, new):
+        # an empty answer never replaces real ratings: Kinopoisk sends one when it throttles
+        return old is not None and (old[1] or old[3]) and not (new[1] or new[3])
+
     done = 0
     with cf.ThreadPoolExecutor(workers) as ex:
         for k, r in ex.map(run, todo):
-            if r:
+            if r and not keep(cache.get(k), r):
                 cache[k] = r
             done += 1
             if done % 2000 == 0:
@@ -395,6 +399,7 @@ CREATE TABLE titles (
 CREATE INDEX titles_type_popularity ON titles(type, popularity DESC);
 CREATE INDEX titles_type_trend ON titles(type, trend DESC);
 CREATE INDEX titles_imdb ON titles(imdb);
+CREATE INDEX titles_type_votes ON titles(type, kp_votes);
 """
 SCHEMA_VERSION = "2"   # the app refuses catalogs older than the schema it reads
 
@@ -412,10 +417,27 @@ def is_anime(mal, animated, country_ids, labels_text):
     return ("аниме" in labels_text or "anime" in labels_text) and JAPAN in country_ids
 
 
-def assemble(out_path, candidates, details, labels, ratings, min_votes, mal_ids):
+def previous_ratings(path):
+    """Ratings of the snapshot this build replaces: the fallback for titles Kinopoisk did not answer for."""
+    if not path or not os.path.exists(path):
+        return {}
+    try:
+        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        rows = db.execute("SELECT kp, kp_rating, kp_votes, imdb_rating, imdb_votes FROM titles WHERE kp_votes > 0 OR imdb_votes > 0").fetchall()
+        db.close()
+    except sqlite3.Error as e:
+        log(f"previous snapshot unreadable: {e}")
+        return {}
+    log(f"previous snapshot: {len(rows)} rated titles")
+    return {str(kp): [kr or 0.0, kv or 0, ir or 0.0, iv or 0, 0] for kp, kr, kv, ir, iv in rows}
+
+
+def assemble(out_path, candidates, details, labels, ratings, min_votes, mal_ids, previous=None):
     rows = []
     skipped = {"no_details": 0, "excluded": 0, "no_title": 0, "few_votes": 0, "future": 0}
     seen = set()
+    previous = previous or {}
+    borrowed = 0
     for q, cand in candidates.items():
         d = details.get(q)
         if not d or not d.get("kp"):
@@ -450,6 +472,10 @@ def assemble(out_path, candidates, details, labels, ratings, min_votes, mal_ids)
         year = year_of(d.get("date")) or year_of(d.get("start"))
         end_year = year_of(d.get("end"))
         r = ratings.get(str(kp)) or [0.0, 0, 0.0, 0, 0]
+        if not (r[1] or r[3]) and str(kp) in previous:
+            # no answer this time: last week's ratings are far better than none (and keep the title in)
+            r = previous[str(kp)]
+            borrowed += 1
         kp_rating, kp_votes, imdb_rating, imdb_votes = r[0], r[1], r[2], r[3]
         if year and year > YEAR + 1:
             skipped["future"] += 1
@@ -492,7 +518,8 @@ def assemble(out_path, candidates, details, labels, ratings, min_votes, mal_ids)
             " ".join(x for x in {normalize(title), normalize(original), normalize(d.get("en"))} if x),
             mal,
         ))
-    log(f"assemble: {len(rows)} titles ({sum(1 for r in rows if r[7] & ANIME_BIT)} anime), skipped {skipped}")
+    log(f"assemble: {len(rows)} titles ({sum(1 for r in rows if r[7] & ANIME_BIT)} anime), skipped {skipped}, "
+        f"ratings from the previous snapshot: {borrowed}")
 
     tmp = out_path + ".tmp"
     if os.path.exists(tmp):
@@ -506,6 +533,9 @@ def assemble(out_path, candidates, details, labels, ratings, min_votes, mal_ids)
         ("schema", SCHEMA_VERSION),
         ("genres", json.dumps([g for g, _ in GENRES], ensure_ascii=False)),
     ])
+    db.commit()
+    # statistics let SQLite pick the right index for each shelf (votes for tops, trend for the rest)
+    db.execute("ANALYZE")
     db.commit()
     db.execute("VACUUM")
     db.close()
@@ -522,7 +552,10 @@ def main():
     ap.add_argument("--min-votes", type=int, default=50)
     ap.add_argument("--rating-age-days", type=int, default=21)
     ap.add_argument("--skip-ratings", action="store_true")
+    ap.add_argument("--previous", default="app/src/main/assets/catalog/catalog.db",
+                    help="the snapshot being replaced: its ratings fill in for titles Kinopoisk did not answer for")
     args = ap.parse_args()
+    previous = previous_ratings(args.previous)
     os.makedirs(args.work, exist_ok=True)
 
     cand_path = os.path.join(args.work, "candidates.json")
@@ -551,7 +584,7 @@ def main():
         ratings = load_json(os.path.join(args.work, "ratings.json"), {})
     else:
         ratings = fetch_ratings(args.work, kps, args.rating_age_days)
-    assemble(args.out, candidates, details, labels, ratings, args.min_votes, fetch_mal_ids(args.work))
+    assemble(args.out, candidates, details, labels, ratings, args.min_votes, fetch_mal_ids(args.work), previous)
 
 
 if __name__ == "__main__":

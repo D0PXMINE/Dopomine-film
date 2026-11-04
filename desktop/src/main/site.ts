@@ -1,7 +1,7 @@
 import { app, BrowserWindow, session, WebContents, WebContentsView, WebFrameMain } from "electron";
 import fs from "node:fs";
 import path from "node:path";
-import type { Stream } from "../shared/types";
+import type { Stream, StreamFormat } from "../shared/types";
 import { UA } from "./net";
 import { formatOf } from "./resolve/common";
 
@@ -49,11 +49,57 @@ type Catch = (s: Stream) => void;
 let onCatch: Catch | null = null;
 let manifestsOnly = false;
 const reported = new Set<string>();
+/** Headers of recent requests, by request id and by address: what the player sent for its stream. */
+const sentById = new Map<number, Record<string, string>>();
+const sentByUrl = new Map<string, Record<string, string>>();
+const MANIFEST_TYPE = /mpegurl|dash\+xml/i;
+/** frames.js reports from inside the page arrive as console messages starting with this. */
+const BRIDGE_MARK = "\u0001dpm:";
 
 function looksLikeStream(url: string): boolean {
   const p = url.split("?")[0].toLowerCase();
   return p.endsWith(".m3u8") || p.endsWith(".mpd") || p.includes(".m3u8/") ||
     (!manifestsOnly && p.endsWith(".mp4") && !p.includes("preview") && !p.includes("trailer"));
+}
+
+function remember<K, V>(map: Map<K, V>, key: K, value: V) {
+  map.set(key, value);
+  if (map.size > 400) map.delete(map.keys().next().value as K);
+}
+
+/** A stream address the page's player asked for: offered to whoever waits for one. */
+function caught(url: string, headers: Record<string, string>, format?: StreamFormat) {
+  if (!onCatch || !/^https?:/.test(url)) return;
+  const key = url.split("?")[0];
+  if (reported.has(key)) return;
+  try {
+    const host = new URL(url).host;
+    if (isAdHost(host) || AD_URL.test(url.toLowerCase())) return;
+  } catch {
+    return;
+  }
+  const kind = format ?? formatOf(url);
+  if (manifestsOnly && kind == "PROGRESSIVE") return;
+  reported.add(key);
+  onCatch({ url, format: kind, headers, audioNames: [], subtitles: [], variants: [], segments: [] });
+}
+
+/** What frames.js posts from inside the page (manifests recognised by their content). */
+function onFrameMessage(text: string) {
+  if (!text.startsWith(BRIDGE_MARK)) return;
+  try {
+    const m = JSON.parse(text.slice(BRIDGE_MARK.length)) as { type?: string; url?: string; referer?: string; kind?: string };
+    if (m.type != "media" || !m.url) return;
+    const headers = sentByUrl.get(m.url) ?? (m.referer?.startsWith("http") ? { Referer: m.referer } : {});
+    caught(m.url, headers, m.kind == "hls" ? "HLS" : m.kind == "dash" ? "DASH" : undefined);
+  } catch { /* not ours */ }
+}
+
+/** frames.js with a bridge to the app (console messages) and the catching mode set. */
+function framesScript(visible: boolean): string {
+  return `window.__dpmSniff = true; window.__dpmVisible = ${visible};` +
+    `if (!window.dpmBridge) window.dpmBridge = { postMessage: function (m) { console.debug(${JSON.stringify(BRIDGE_MARK)} + m); } };` +
+    readAsset("frames.js");
 }
 
 let installed = false;
@@ -76,17 +122,23 @@ function siteSession() {
   });
   // the final headers of the stream request: what the player itself sent
   ses.webRequest.onSendHeaders(d => {
-    if (!onCatch || !/^https?:/.test(d.url) || !looksLikeStream(d.url)) return;
-    const key = d.url.split("?")[0];
-    if (reported.has(key)) return;
-    reported.add(key);
+    if (!onCatch || !/^https?:/.test(d.url) || d.resourceType == "image" || d.resourceType == "stylesheet" || d.resourceType == "font") return;
     const headers: Record<string, string> = {};
     for (const [k, v] of Object.entries(d.requestHeaders)) {
       const lower = k.toLowerCase();
       if (["range", "accept-encoding", "upgrade-insecure-requests", "host", "connection"].includes(lower) || lower.startsWith("sec-")) continue;
       headers[k] = v;
     }
-    onCatch({ url: d.url, format: formatOf(d.url), headers, audioNames: [], subtitles: [], variants: [], segments: [] });
+    remember(sentById, d.id, headers);
+    remember(sentByUrl, d.url, headers);
+    if (looksLikeStream(d.url)) caught(d.url, headers);
+  });
+  // manifests behind addresses with no telling extension are known by what they turn out to be
+  ses.webRequest.onHeadersReceived((d, cb) => {
+    cb({});
+    if (!onCatch || !/^https?:/.test(d.url)) return;
+    const type = Object.entries(d.responseHeaders ?? {}).find(([k]) => k.toLowerCase() == "content-type")?.[1]?.[0] ?? "";
+    if (MANIFEST_TYPE.test(type)) caught(d.url, sentById.get(d.id) ?? sentByUrl.get(d.url) ?? {}, /dash/i.test(type) ? "DASH" : "HLS");
   });
   return ses;
 }
@@ -98,21 +150,24 @@ async function inAllFrames(wc: WebContents, code: string): Promise<unknown[]> {
   return Promise.all(frames.map(f => f.executeJavaScript(code).catch(() => null)));
 }
 
-const MUTE_AND_PLAY = `(function(){
-  window.__dpmSniff = true;
-  document.querySelectorAll('video').forEach(function(v){ v.muted = true; try { v.play(); } catch (e) {} });
-  var el = document.elementFromPoint(innerWidth / 2, innerHeight / 2);
-  var b = el && el.closest && el.closest('button,[class*=play],[id*=play]');
-  if (b) try { b.click(); } catch (e) {}
-})()`;
-
 function configure(mirror: string, picker: string, block: boolean) {
   mirrorHost = new URL(mirror).host;
   pickerDomain = registrable(picker);
   adBlock = block;
 }
 
-/** Opens the site hidden and waits for its player to request a stream. */
+/** The page's scripts run in every frame as soon as it has a document (players live in iframes). */
+function injectFrames(wc: WebContents, visible: boolean) {
+  const code = framesScript(visible);
+  wc.on("dom-ready", () => void inAllFrames(wc, code));
+  wc.on("did-frame-finish-load", () => void inAllFrames(wc, code));
+  wc.on("console-message", details => onFrameMessage(details.message));
+}
+
+/**
+ * Opens the page hidden and waits for its player to request a stream. A page that gives none
+ * within the time is then shown to the viewer (see [showSite]), where catching goes on.
+ */
 export async function sniff(mirror: string, picker: string, kp: number, opts: { adBlock: boolean; manifestsOnly: boolean; timeoutMs?: number; embedUrl?: string }, log: (l: string) => void): Promise<Stream | null> {
   configure(mirror, picker, opts.adBlock);
   manifestsOnly = opts.manifestsOnly;
@@ -126,27 +181,24 @@ export async function sniff(mirror: string, picker: string, kp: number, opts: { 
   });
   win.webContents.setAudioMuted(true);
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  const frames = readAsset("frames.js");
-  win.webContents.on("did-frame-finish-load", () => void inAllFrames(win.webContents, "window.__dpmSniff = true;" + frames));
+  injectFrames(win.webContents, false);
   let timer: NodeJS.Timeout | undefined;
-  let nudge: NodeJS.Timeout | undefined;
+  let mine: Catch | null = null;
   try {
     return await new Promise<Stream | null>(resolve => {
-      timer = setTimeout(() => resolve(null), opts.timeoutMs ?? 30_000);
-      nudge = setInterval(() => void inAllFrames(win.webContents, MUTE_AND_PLAY), 1500);
-      onCatch = s => {
+      timer = setTimeout(() => resolve(null), opts.timeoutMs ?? 12_000);
+      mine = s => {
         log(`Найден поток: ${s.url.slice(0, 120)}`);
-        if (manifestsOnly && s.format == "PROGRESSIVE") return;
         resolve(s);
       };
+      onCatch = mine;
       const url = opts.embedUrl ?? `${mirror}/${kp}`;
       win.loadURL(url, { httpReferrer: opts.embedUrl ? `https://${picker}/` : `${mirror}/` }).catch(e => log(`Страница не открылась: ${(e as Error).message}`));
     });
   } finally {
     // the page must not be touched once it is gone (an exception here would stop the whole app)
     clearTimeout(timer);
-    clearInterval(nudge);
-    onCatch = null;
+    if (onCatch === mine) onCatch = null;
     if (!win.isDestroyed()) win.destroy();
   }
 }
@@ -155,11 +207,28 @@ export async function sniff(mirror: string, picker: string, kp: number, opts: { 
 
 let view: WebContentsView | null = null;
 let timeTimer: NodeJS.Timeout | null = null;
+/** The catcher of the shown page (only it may be cleared when the page goes). */
+let viewCatch: Catch | null = null;
 
-export function showSite(win: BrowserWindow, mirror: string, picker: string, kp: number, block: boolean, bounds: Electron.Rectangle, onTime: (t: number, d: number) => void) {
+/**
+ * The page over the player area: the site (or one player's page, [opts.embedUrl]). With
+ * [opts.onStream] the app keeps catching: the stream its player loads once the viewer presses
+ * play is handed over, and the app's own player takes it from there.
+ */
+export function showSite(win: BrowserWindow, mirror: string, picker: string, kp: number, block: boolean, bounds: Electron.Rectangle, onTime: (t: number, d: number) => void, opts: { embedUrl?: string | null; onStream?: Catch } = {}) {
   hideSite(win);
   configure(mirror, picker, block);
   const ses = siteSession();
+  manifestsOnly = !block;
+  reported.clear();
+  if (opts.onStream) {
+    const handOver = opts.onStream;
+    viewCatch = s => {
+      if (onCatch === viewCatch) onCatch = null;
+      handOver(s);
+    };
+    onCatch = viewCatch;
+  }
   view = new WebContentsView({ webPreferences: { session: ses, autoplayPolicy: "no-user-gesture-required", sandbox: true } });
   const wc = view.webContents;
   wc.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -174,12 +243,17 @@ export function showSite(win: BrowserWindow, mirror: string, picker: string, kp:
   wc.on("will-navigate", guard);
   wc.on("will-redirect", guard);
   const top = readAsset("top.js");
-  const frames = readAsset("frames.js");
-  wc.on("dom-ready", () => void wc.executeJavaScript(top).catch(() => null));
-  wc.on("did-frame-finish-load", () => void inAllFrames(wc, frames));
+  if (!opts.embedUrl) wc.on("dom-ready", () => void wc.executeJavaScript(top).catch(() => null));
+  if (opts.onStream) {
+    injectFrames(wc, true);
+  } else {
+    const frames = readAsset("frames.js");
+    wc.on("did-frame-finish-load", () => void inAllFrames(wc, frames));
+  }
   win.contentView.addChildView(view);
   view.setBounds(bounds);
-  void wc.loadURL(`${mirror}/${kp}`, { httpReferrer: `${mirror}/` });
+  if (opts.embedUrl) void wc.loadURL(opts.embedUrl, { httpReferrer: `https://${picker}/` });
+  else void wc.loadURL(`${mirror}/${kp}`, { httpReferrer: `${mirror}/` });
   // the page's video position, for intro skipping
   timeTimer = setInterval(async () => {
     if (!view || view.webContents.isDestroyed()) return;
@@ -201,6 +275,8 @@ export async function siteSeek(seconds: number) {
 export function hideSite(win: BrowserWindow) {
   if (timeTimer) clearInterval(timeTimer);
   timeTimer = null;
+  if (viewCatch && onCatch === viewCatch) onCatch = null;
+  viewCatch = null;
   if (view) {
     if (!win.isDestroyed()) win.contentView.removeChildView(view);
     if (!view.webContents.isDestroyed()) view.webContents.close();

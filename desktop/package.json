@@ -1,7 +1,7 @@
 {
   "name": "dopomine-desktop",
   "productName": "Dopomine",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Фильмы, сериалы и аниме с рейтингами Кинопоиска и IMDb, свой плеер без рекламы",
   "author": "dopamine",
   "license": "GPL-3.0-only",
@@ -23,6 +23,7 @@
     "@types/react-dom": "19.1.6",
     "@types/sql.js": "^1.4.9",
     "@vitejs/plugin-react": "4.7.0",
+    "dashjs": "5.2.1",
     "electron": "44.7.0",
     "electron-builder": "26.17.0",
     "esbuild": "0.25.5",
