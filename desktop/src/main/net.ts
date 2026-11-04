@@ -8,7 +8,7 @@ export const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 
  * hide who they are (a browser User-Agent outside a browser counts as "unidentified": 10 requests
  * a minute per address); named ones get 200. Shikimori asks the same.
  */
-const appUa = () => `Dopomine-desktop/${app.getVersion()} (https://github.com/D0PXMINE/Dopomine-film)`;
+const appUa = () => `Dopamine-desktop/${app.getVersion()} (https://github.com/D0PXMINE/Dopomine-film)`;
 const wantsAppName = (url: string) => /^https:\/\/([a-z0-9-]+\.)*(wikipedia\.org|wikidata\.org|wikimedia\.org|shikimori\.(io|one)|aniskip\.com)\//.test(url);
 
 /**

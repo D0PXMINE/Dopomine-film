@@ -22,7 +22,7 @@ const val BROWSER_UA =
     "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
 
 /** How the app names itself to open APIs that ask clients to (with a way to reach the author). */
-const val APP_UA = "Dopomine/${BuildConfig.VERSION_NAME} (https://github.com/D0PXMINE/Dopomine-film) okhttp/4.12.0"
+const val APP_UA = "Dopamine/${BuildConfig.VERSION_NAME} (https://github.com/D0PXMINE/Dopomine-film) okhttp/4.12.0"
 
 object Http {
     /** @param interceptor lets tests answer requests without the network. */

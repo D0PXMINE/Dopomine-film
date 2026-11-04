@@ -29,7 +29,7 @@ import time
 import urllib.parse
 import urllib.request
 
-UA = "DopomineCatalogBuilder/2.0 (https://github.com/D0PXMINE/Dopomine-film)"
+UA = "DopamineCatalogBuilder/2.0 (https://github.com/D0PXMINE/Dopomine-film)"
 WDQS = "https://query.wikidata.org/sparql"
 YEAR = dt.date.today().year
 

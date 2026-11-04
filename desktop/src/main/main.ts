@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, Menu, nativeTheme, net, protocol, shell } from "electron";
+import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { CatalogQuery, Movie, Settings, SitePage, SkipRequest, Stream } from "../shared/types";
@@ -11,7 +12,7 @@ import { fetchSegments } from "./skip";
 import * as store from "./store";
 
 /**
- * Dopomine for desktop. The window (React, src/renderer) shows the catalog and plays videos;
+ * dopamine for desktop. The window (React, src/renderer) shows the catalog and plays videos;
  * this process reads the catalog, talks to the player sites and keeps the library.
  */
 protocol.registerSchemesAsPrivileged([
@@ -21,13 +22,18 @@ protocol.registerSchemesAsPrivileged([
 const DEV_URL = process.env.VITE_DEV_SERVER_URL;
 // tests run with a throwaway profile
 if (process.env.DPM_USER_DATA) app.setPath("userData", process.env.DPM_USER_DATA);
+// the app was called Dopomine: its favourites, history and settings stay where they were
+else {
+  const legacy = path.join(app.getPath("appData"), "Dopomine");
+  if (fs.existsSync(legacy)) app.setPath("userData", legacy);
+}
 const rendererDir = path.join(__dirname, "..", "renderer");
 let win: BrowserWindow | null = null;
 
 /** Kinopoisk links (or bare IDs) given on the command line or opened with the app. */
 function kpIdFrom(args: string[]): number | null {
   for (const a of args) {
-    const m = /kinopoisk\.ru\/(?:film|series)\/(\d+)/.exec(a) ?? /^dopomine:\/\/(?:film\/)?(\d+)/.exec(a);
+    const m = /kinopoisk\.ru\/(?:film|series)\/(\d+)/.exec(a) ?? /^dop[ao]mine:\/\/(?:film\/)?(\d+)/.exec(a);
     if (m) return Number(m[1]);
   }
   return null;
@@ -47,7 +53,7 @@ function createWindow() {
     minHeight: 620,
     show: false,
     backgroundColor: colors.bg,
-    title: "Dopomine",
+    title: "Dopamine",
     icon: path.join(__dirname, "assets", "icon.png"),
     autoHideMenuBar: true,
     webPreferences: {
@@ -181,8 +187,12 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(() => {
     // macOS needs the standard menus for Cmd+C/V in text fields and Cmd+Q; elsewhere no menu bar
     Menu.setApplicationMenu(process.platform == "darwin" ? Menu.buildFromTemplate([{ role: "appMenu" }, { role: "editMenu" }, { role: "windowMenu" }]) : null);
-    // dopomine://<Kinopoisk ID> links (the installer registers them too; the portable build cannot)
-    if (app.isPackaged) app.setAsDefaultProtocolClient("dopomine");
+    // dopamine://<Kinopoisk ID> links (the installer registers them too; the portable build cannot);
+    // dopomine:// links from before the rename open it as well
+    if (app.isPackaged) {
+      app.setAsDefaultProtocolClient("dopamine");
+      app.setAsDefaultProtocolClient("dopomine");
+    }
     protocol.handle("dpm", req => {
       const { pathname } = new URL(req.url);
       const file = path.join(rendererDir, decodeURIComponent(pathname));

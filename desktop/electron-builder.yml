@@ -1,5 +1,5 @@
 appId: com.dopomine.desktop
-productName: Dopomine
+productName: Dopamine
 copyright: Created by dopamine
 directories:
   output: release
@@ -15,8 +15,9 @@ asar: true
 publish: null
 afterPack: scripts/after-pack.cjs
 protocols:
-  - name: Dopomine
-    schemes: [dopomine]
+  - name: Dopamine
+    # dopomine:// is the old name: links made before the rename still open the app
+    schemes: [dopamine, dopomine]
 win:
   target:
     - target: nsis
@@ -31,21 +32,21 @@ nsis:
   perMachine: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
-  shortcutName: Dopomine
+  shortcutName: Dopamine
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico
-  artifactName: Dopomine-Setup-${version}.${ext}
+  artifactName: Dopamine-Setup-${version}.${ext}
 portable:
-  artifactName: Dopomine-${version}-portable.${ext}
+  artifactName: Dopamine-${version}-portable.${ext}
 linux:
   target: [AppImage, deb]
   syncDesktopName: true
   category: AudioVideo
   icon: build/icon.png
   maintainer: dopamine
-  artifactName: Dopomine-${version}.${ext}
+  artifactName: Dopamine-${version}.${ext}
 mac:
   target: dmg
   category: public.app-category.entertainment
   icon: build/icon.png
-  artifactName: Dopomine-${version}.${ext}
+  artifactName: Dopamine-${version}.${ext}

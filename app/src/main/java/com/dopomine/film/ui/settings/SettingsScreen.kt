@@ -120,7 +120,7 @@ fun SettingsScreen(nav: Nav) {
                     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                         LogoMark(28.dp)
                         Spacer(Modifier.height(8.dp))
-                        Text("dopomine ${BuildConfig.VERSION_NAME}", style = Type.mono, color = T.text3)
+                        Text("dopamine ${BuildConfig.VERSION_NAME}", style = Type.mono, color = T.text3)
                         Row {
                             Text("Created by ", style = Type.mono, color = T.text3)
                             Text(

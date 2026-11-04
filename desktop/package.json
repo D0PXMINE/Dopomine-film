@@ -1,6 +1,6 @@
 {
   "name": "dopomine-desktop",
-  "productName": "Dopomine",
+  "productName": "Dopamine",
   "version": "1.1.0",
   "description": "Фильмы, сериалы и аниме с рейтингами Кинопоиска и IMDb, свой плеер без рекламы",
   "author": "dopamine",
@@ -35,7 +35,7 @@
     "typescript": "5.8.3",
     "vite": "6.3.5"
   },
-  "desktopName": "dopomine.desktop",
+  "desktopName": "dopamine.desktop",
   "homepage": "https://github.com/D0PXMINE/Dopomine-film",
   "repository": {
     "type": "git",

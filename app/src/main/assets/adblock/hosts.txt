@@ -1,4 +1,4 @@
-# Dopomine ad/tracker host blocklist (one domain per line, subdomains are matched too).
+# dopamine ad/tracker host blocklist (one domain per line, subdomains are matched too).
 # Sources: Peter Lowe's ad server list (pgl.yoyo.org), AdAway default hosts (CC BY 3.0),
 # RU AdList domain rules (CC BY 3.0), plus hosts seen on the player page.
 0001.best

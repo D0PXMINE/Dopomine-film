@@ -64,6 +64,17 @@ jobs:
           files=(release/*.exe release/*.AppImage release/*.deb release/*.dmg)
           [ ${#files[@]} -gt 0 ] || { echo "nothing to upload"; exit 1; }
           gh release view desktop >/dev/null 2>&1 || \
-            gh release create desktop --title "Dopomine для компьютера" --latest=false \
+            gh release create desktop --title "dopamine для компьютера" --latest=false \
               --notes "Установщики для Windows, Linux и macOS. Обновляются при каждой сборке." || true
+          gh release edit desktop --title "dopamine для компьютера" || true
           gh release upload desktop "${files[@]}" --clobber
+          # older versions (and the old name) of the installers this system builds go away;
+          # the other systems' files are theirs to replace
+          keep=" "
+          for f in "${files[@]}"; do keep+="$(basename "$f") "; done
+          exts=" "
+          for f in "${files[@]}"; do exts+="${f##*.} "; done
+          gh release view desktop --json assets --jq '.assets[].name' | while read -r name; do
+            [[ "$exts" == *" ${name##*.} "* ]] || continue
+            [[ "$keep" == *" $name "* ]] || gh release delete-asset desktop "$name" --yes || true
+          done

@@ -250,7 +250,7 @@ fun Logo(modifier: Modifier = Modifier) {
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
         LogoMark(26.dp)
         Spacer(Modifier.width(9.dp))
-        Text("dopomine", style = Type.title.copy(fontSize = Type.title.fontSize * 1.08f), color = T.text)
+        Text("dopamine", style = Type.title.copy(fontSize = Type.title.fontSize * 1.08f), color = T.text)
     }
 }
 

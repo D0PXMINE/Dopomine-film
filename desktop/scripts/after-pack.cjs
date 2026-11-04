@@ -1,4 +1,4 @@
-// Sets the icon and version info of Dopomine.exe without Wine (electron-builder's rcedit needs it
+// Sets the icon and version info of Dopamine.exe without Wine (electron-builder's rcedit needs it
 // when building on Linux or macOS). Runs after packing, before the installer is made.
 const fs = require("node:fs");
 const path = require("node:path");
@@ -21,12 +21,12 @@ exports.default = async function afterPack(context) {
   info.setFileVersion(major, minor, patch, 0, 1033);
   info.setProductVersion(major, minor, patch, 0, 1033);
   info.setStringValues({ lang: 1033, codepage: 1200 }, {
-    FileDescription: "Dopomine",
-    ProductName: "Dopomine",
+    FileDescription: "Dopamine",
+    ProductName: "Dopamine",
     CompanyName: "dopamine",
     LegalCopyright: "Created by dopamine",
-    OriginalFilename: "Dopomine.exe",
-    InternalName: "Dopomine",
+    OriginalFilename: "Dopamine.exe",
+    InternalName: "Dopamine",
     FileVersion: version,
     ProductVersion: version,
   });

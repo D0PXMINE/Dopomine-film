@@ -99,7 +99,7 @@ export default function SettingsView() {
       <div className="about">
         <Mark size={28} />
         <div>
-          <div className="title">dopomine {version}</div>
+          <div className="title">dopamine {version}</div>
           <div className="mono muted small">
             Created by <button type="button" className="link" onClick={() => void api.app.openExternal("https://t.me/d0paminx")}>dopamine</button>
           </div>

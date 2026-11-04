@@ -12,9 +12,9 @@ export function Mark({ size = 26 }: { size?: number }) {
 
 export default function Logo({ size = 22, mark = 30, gap = 12 }: { size?: number; mark?: number; gap?: number }) {
   return (
-    <span className="brand" style={{ gap }} role="img" aria-label="dopomine">
+    <span className="brand" style={{ gap }} role="img" aria-label="dopamine">
       <Mark size={mark} />
-      <span className="wordmark" style={{ fontSize: size }}>dopomine</span>
+      <span className="wordmark" style={{ fontSize: size }}>dopamine</span>
     </span>
   );
 }
