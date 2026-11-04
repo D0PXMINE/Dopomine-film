@@ -1,7 +1,7 @@
 import { app, BrowserWindow, session, WebContents, WebContentsView, WebFrameMain } from "electron";
 import fs from "node:fs";
 import path from "node:path";
-import type { Stream, StreamFormat } from "../shared/types";
+import type { EpisodeHint, Stream, StreamFormat } from "../shared/types";
 import { UA } from "./net";
 import { formatOf } from "./resolve/common";
 
@@ -84,20 +84,67 @@ function caught(url: string, headers: Record<string, string>, format?: StreamFor
   onCatch({ url, format: kind, headers, audioNames: [], subtitles: [], variants: [], segments: [] });
 }
 
-/** What frames.js posts from inside the page (manifests recognised by their content). */
-function onFrameMessage(text: string) {
+// ---- the season and episode the page shows ---------------------------------------------------------
+// A caught stream carries no numbers; the intro of a show is looked up by them.
+
+/** What each frame says it plays, latest last: the frame with the video is believed first. */
+const hints = new Map<string, EpisodeHint>();
+let mediaFrame: string | null = null;
+let hint: EpisodeHint = { season: null, episode: null };
+let onHint: ((h: EpisodeHint) => void) | null = null;
+
+function frameKey(frame: WebFrameMain | null | undefined): string {
+  try {
+    return frame ? `${frame.processId}:${frame.routingId}` : "?";
+  } catch {
+    return "?"; // a frame already gone
+  }
+}
+
+function publishHint() {
+  const list = [...hints.values()].reverse();
+  const media = mediaFrame != null ? hints.get(mediaFrame) : undefined;
+  const best = (media?.episode != null ? media : undefined) ?? list.find(h => h.episode != null)
+    ?? (media?.season != null ? media : undefined) ?? list.find(h => h.season != null) ?? { season: null, episode: null };
+  if (best.season == hint.season && best.episode == hint.episode) return;
+  hint = best;
+  onHint?.(best);
+}
+
+function resetHints() {
+  hints.clear();
+  mediaFrame = null;
+  hint = { season: null, episode: null };
+}
+
+/** The season and episode the page showed last (null when it showed neither). */
+export const pageHint = (): EpisodeHint | null => (hint.season != null || hint.episode != null ? { ...hint } : null);
+
+/** What frames.js posts from inside the page (manifests recognised by their content, episodes shown). */
+function onFrameMessage(text: string, frame?: WebFrameMain | null) {
   if (!text.startsWith(BRIDGE_MARK)) return;
   try {
-    const m = JSON.parse(text.slice(BRIDGE_MARK.length)) as { type?: string; url?: string; referer?: string; kind?: string };
+    const m = JSON.parse(text.slice(BRIDGE_MARK.length)) as { type?: string; url?: string; referer?: string; kind?: string; season?: number | null; episode?: number | null };
+    const key = frameKey(frame);
+    if (m.type == "episode") {
+      const num = (v: unknown) => (typeof v == "number" && Number.isInteger(v) && v > 0 ? v : null);
+      hints.delete(key);
+      hints.set(key, { season: num(m.season), episode: num(m.episode) });
+      if (hints.size > 24) hints.delete(hints.keys().next().value as string);
+      publishHint();
+      return;
+    }
     if (m.type != "media" || !m.url) return;
+    mediaFrame = key;
+    publishHint();
     const headers = sentByUrl.get(m.url) ?? (m.referer?.startsWith("http") ? { Referer: m.referer } : {});
     caught(m.url, headers, m.kind == "hls" ? "HLS" : m.kind == "dash" ? "DASH" : undefined);
   } catch { /* not ours */ }
 }
 
 /** frames.js with a bridge to the app (console messages) and the catching mode set. */
-function framesScript(visible: boolean): string {
-  return `window.__dpmSniff = true; window.__dpmVisible = ${visible};` +
+function framesScript(visible: boolean, sniff = true): string {
+  return `window.__dpmSniff = ${sniff}; window.__dpmVisible = ${visible};` +
     `if (!window.dpmBridge) window.dpmBridge = { postMessage: function (m) { console.debug(${JSON.stringify(BRIDGE_MARK)} + m); } };` +
     readAsset("frames.js");
 }
@@ -157,11 +204,11 @@ function configure(mirror: string, picker: string, block: boolean) {
 }
 
 /** The page's scripts run in every frame as soon as it has a document (players live in iframes). */
-function injectFrames(wc: WebContents, visible: boolean) {
-  const code = framesScript(visible);
+function injectFrames(wc: WebContents, visible: boolean, sniff = true) {
+  const code = framesScript(visible, sniff);
   wc.on("dom-ready", () => void inAllFrames(wc, code));
   wc.on("did-frame-finish-load", () => void inAllFrames(wc, code));
-  wc.on("console-message", details => onFrameMessage(details.message));
+  wc.on("console-message", details => onFrameMessage(details.message, details.frame));
 }
 
 /**
@@ -172,6 +219,8 @@ export async function sniff(mirror: string, picker: string, kp: number, opts: { 
   configure(mirror, picker, opts.adBlock);
   manifestsOnly = opts.manifestsOnly;
   reported.clear();
+  resetHints();
+  onHint = null;
   const ses = siteSession();
   const win = new BrowserWindow({
     show: false,
@@ -215,12 +264,14 @@ let viewCatch: Catch | null = null;
  * [opts.onStream] the app keeps catching: the stream its player loads once the viewer presses
  * play is handed over, and the app's own player takes it from there.
  */
-export function showSite(win: BrowserWindow, mirror: string, picker: string, kp: number, block: boolean, bounds: Electron.Rectangle, onTime: (t: number, d: number) => void, opts: { embedUrl?: string | null; onStream?: Catch } = {}) {
+export function showSite(win: BrowserWindow, mirror: string, picker: string, kp: number, block: boolean, bounds: Electron.Rectangle, onTime: (t: number, d: number) => void, opts: { embedUrl?: string | null; onStream?: Catch; onEpisode?: (h: EpisodeHint) => void } = {}) {
   hideSite(win);
   configure(mirror, picker, block);
   const ses = siteSession();
   manifestsOnly = !block;
   reported.clear();
+  resetHints();
+  onHint = opts.onEpisode ?? null;
   if (opts.onStream) {
     const handOver = opts.onStream;
     viewCatch = s => {
@@ -244,12 +295,8 @@ export function showSite(win: BrowserWindow, mirror: string, picker: string, kp:
   wc.on("will-redirect", guard);
   const top = readAsset("top.js");
   if (!opts.embedUrl) wc.on("dom-ready", () => void wc.executeJavaScript(top).catch(() => null));
-  if (opts.onStream) {
-    injectFrames(wc, true);
-  } else {
-    const frames = readAsset("frames.js");
-    wc.on("did-frame-finish-load", () => void inAllFrames(wc, frames));
-  }
+  // without catching, the bridge still tells which episode the page shows
+  injectFrames(wc, true, !!opts.onStream);
   win.contentView.addChildView(view);
   view.setBounds(bounds);
   if (opts.embedUrl) void wc.loadURL(opts.embedUrl, { httpReferrer: `https://${picker}/` });
@@ -275,6 +322,7 @@ export async function siteSeek(seconds: number) {
 export function hideSite(win: BrowserWindow) {
   if (timeTimer) clearInterval(timeTimer);
   timeTimer = null;
+  onHint = null;
   if (viewCatch && onCatch === viewCatch) onCatch = null;
   viewCatch = null;
   if (view) {

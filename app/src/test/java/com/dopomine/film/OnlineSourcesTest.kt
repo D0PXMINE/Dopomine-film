@@ -14,6 +14,7 @@ import com.dopomine.film.player.resolve.PlayerSite
 import com.dopomine.film.player.resolve.CollapsResolver
 import com.dopomine.film.player.resolve.StreamFormat
 import com.dopomine.film.player.skip.SegmentKind
+import com.dopomine.film.player.skip.AnimeTitle
 import com.dopomine.film.player.skip.SkipRequest
 import com.dopomine.film.player.skip.SkipSegmentsProvider
 import kotlinx.coroutines.runBlocking
@@ -133,7 +134,8 @@ class OnlineSourcesTest {
     @Test
     fun introDatabasesAnswer() = runBlocking {
         assumeTrue(System.getProperty("dpm.online") == "true")
-        val provider = SkipSegmentsProvider(http)
+        // named to the open APIs as the app is (Shikimori asks it of its users)
+        val provider = SkipSegmentsProvider(Http.client(kotlin.io.path.createTempDirectory("dpm-http").toFile()))
         val got = provider.fetch(SkipRequest("tt0944947", null, 1, 3, 3_440_000)) { println(it) }
         println("GoT s1e3: $got")
         assertTrue(got.any { it.kind == SegmentKind.INTRO && it.endMs!! in 60_000..140_000 })
@@ -143,5 +145,15 @@ class OnlineSourcesTest {
         val matrix = provider.fetch(SkipRequest("tt0133093", null, null, null, 8_160_000)) { println(it) }
         println("Matrix: $matrix")
         assertTrue(matrix.isNotEmpty())
+        // no MyAnimeList ID in the catalog: found on Shikimori, the season located by episode counts
+        val demonSlayer = provider.fetch(
+            SkipRequest(
+                null, null, 2, 10, 1_440_000,
+                anime = AnimeTitle("Клинок, рассекающий демонов", null, 2019, true),
+                seasonSizes = listOf(26, 18),
+            ),
+        ) { println(it) }
+        println("Demon Slayer s2e10: $demonSlayer")
+        assertTrue(demonSlayer.any { it.kind == SegmentKind.INTRO && it.source.startsWith("AniSkip") })
     }
 }

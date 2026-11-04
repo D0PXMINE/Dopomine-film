@@ -66,6 +66,7 @@
     function reportManifest(url, kind) {
         if (!sniffing() || !/^https?:/i.test(url || '')) return;
         streamSeen = true;
+        reportEpisode(); // what plays goes first: the app may close the page once it has the stream
         post({ type: 'media', url: url, referer: location.href, kind: kind || '' });
     }
 
@@ -265,6 +266,7 @@
         if (/^https?:/.test(src) && src !== v.__dpmSrc) {
             v.__dpmSrc = src;
             if (sniffing()) streamSeen = true;
+            reportEpisode();
             post({ type: 'media', url: src, referer: location.href });
         }
     }
@@ -411,6 +413,114 @@
             }
         }
     }, 1000);
+
+    // ---- Which episode the page plays ---------------------------------------------------------
+    // A stream caught from a player carries no season or episode number, and the intro of a show
+    // is looked up by them. Players show the chosen ones in a picker or as a highlighted button
+    // ("Сезон 2", "5 серия", "S02E05"); some also carry them in their address.
+    var NOT_LETTER = '(?![a-zа-яё])'; // "сезон", not "сезонов"; "серия", not "серии"
+    var SEASON_W = '(?:сезон|season)' + NOT_LETTER;
+    var EPISODE_W = '(?:серия|эпизод|episode)' + NOT_LETTER;
+    var BETWEEN = '[^\\da-zа-яё]{0,6}';
+    var BOTH_RES = [
+        /(?:^|[^a-z])s(\d{1,2})\s*e(\d{1,4})(?!\d)/i,
+        new RegExp(SEASON_W + '\\s*№?\\s*(\\d{1,2})' + BETWEEN + EPISODE_W + '\\s*№?\\s*(\\d{1,4})', 'i'),
+        new RegExp('(\\d{1,2})\\s*-?\\s*(?:й\\s+)?' + SEASON_W + BETWEEN + '(\\d{1,4})\\s*-?\\s*(?:я\\s+)?' + EPISODE_W, 'i')
+    ];
+    function oneRes(word, digits, ending) {
+        return [
+            new RegExp(word + '\\s*№?\\s*(\\d{1,' + digits + '})(?!\\d)', 'i'),
+            new RegExp('(?:^|\\D)(\\d{1,' + digits + '})\\s*-?\\s*(?:' + ending + '\\s+)?' + word, 'i')
+        ];
+    }
+    var SEASON_RES = oneRes(SEASON_W, 2, 'й');
+    var EPISODE_RES = oneRes(EPISODE_W, 4, 'я');
+    var SEASON_ANY = new RegExp(SEASON_W, 'i');
+    var EPISODE_ANY = new RegExp(EPISODE_W, 'i');
+
+    function firstNumber(res, text) {
+        for (var i = 0; i < res.length; i++) {
+            var m = res[i].exec(text);
+            if (m && +m[1] > 0) return +m[1];
+        }
+        return null;
+    }
+
+    /** {s, e} from a label like "Сезон 1 Серия 3", "3 серия" or "S01E03"; null if it names neither. */
+    function episodeIn(text) {
+        text = String(text || '').replace(/\s+/g, ' ').trim();
+        // "(1-8 сезон)" next to a voice-over tells what it has, not what plays
+        if (!text || text.length > 80 || /\d\s*[-–—]\s*\d/.test(text)) return null;
+        for (var i = 0; i < BOTH_RES.length; i++) {
+            var m = BOTH_RES[i].exec(text);
+            if (m && +m[1] > 0 && +m[2] > 0) return { s: +m[1], e: +m[2] };
+        }
+        var hasS = SEASON_ANY.test(text), hasE = EPISODE_ANY.test(text);
+        if (hasS && hasE) return null; // both, in an order not understood: no guessing
+        if (hasE) { var e = firstNumber(EPISODE_RES, text); return e ? { s: null, e: e } : null; }
+        if (hasS) { var s = firstNumber(SEASON_RES, text); return s ? { s: s, e: null } : null; }
+        return null;
+    }
+
+    // a bare number in a highlighted button: the list around it says what it counts
+    var SEASON_LIST = /season|sezon|сезон/;
+    var EPISODE_LIST = /episod|(?:^|[^a-z])(?:series|seriya|serii|seria)(?:[^a-z]|$)|сери[ия](?![а-яё])/;
+    function bareNumber(el, text) {
+        if (!/^\s*\d{1,4}\s*$/.test(text) || +text <= 0) return null;
+        for (var i = 0, p = el.parentElement; i < 3 && p; i++, p = p.parentElement) {
+            var s = label(p) + ' ' + ((p.getAttribute('name') || '') + ' ' + (p.getAttribute('data-type') || '')).toLowerCase();
+            if (SEASON_LIST.test(s)) return { s: +text, e: null };
+            if (EPISODE_LIST.test(s)) return { s: null, e: +text };
+        }
+        return null;
+    }
+
+    var ACTIVE = '[class*="active" i],[class*="selected" i],[class*="current" i],[class*="chosen" i],' +
+        '[aria-selected="true"],[aria-current]:not([aria-current="false"])';
+
+    function scanEpisode() {
+        var found = { s: null, e: null };
+        function take(h) {
+            if (!h) return;
+            if (found.s == null && h.s) found.s = h.s;
+            if (found.e == null && h.e) found.e = h.e;
+        }
+        // pickers: their chosen option
+        var selects = document.getElementsByTagName('select');
+        for (var i = 0; i < selects.length; i++) {
+            var opt = selects[i].options && selects[i].options[selects[i].selectedIndex];
+            if (opt) take(episodeIn(opt.text) || bareNumber(opt, opt.text));
+        }
+        // highlighted buttons and list items
+        var marked = document.querySelectorAll(ACTIVE);
+        for (var j = 0; j < marked.length && j < 300; j++) {
+            var text = marked[j].textContent || '';
+            if (text.length <= 80) take(episodeIn(text) || bareNumber(marked[j], text));
+        }
+        take(episodeIn(document.title));
+        // the address the player was opened with: what it started on, if nothing above says more
+        try {
+            var q = new URLSearchParams(location.search);
+            var qs = parseInt(q.get('season'), 10), qe = parseInt(q.get('episode'), 10);
+            take({ s: qs > 0 && qs < 100 ? qs : null, e: qe > 0 && qe < 10000 ? qe : null });
+        } catch (e) { }
+        return found;
+    }
+
+    var lastEpisode = ':';
+    function reportEpisode() {
+        if (!document.documentElement || lastEpisode === undefined) return;
+        var h;
+        try { h = scanEpisode(); } catch (e) { return; }
+        var sig = (h.s || '') + ':' + (h.e || '');
+        if (sig === lastEpisode) return;
+        lastEpisode = sig;
+        post({ type: 'episode', season: h.s, episode: h.e });
+    }
+    setTimeout(reportEpisode, 700);
+    setInterval(reportEpisode, 2000);
+    // a new video starts loading: the picker has just changed
+    window.addEventListener('loadstart', function () { setTimeout(reportEpisode, 100); }, true);
 
     // ---- Commands from the app ----------------------------------------------------------------
     if (bridge) {

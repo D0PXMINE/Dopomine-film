@@ -51,6 +51,7 @@ import com.dopomine.film.player.resolve.AnimevostResolver
 import com.dopomine.film.player.resolve.Playable
 import com.dopomine.film.player.resolve.SourceInfo
 import com.dopomine.film.player.resolve.Stream
+import com.dopomine.film.player.skip.AnimeTitle
 import com.dopomine.film.player.skip.Segment
 import com.dopomine.film.player.skip.SegmentKind
 import com.dopomine.film.player.skip.SegmentRules
@@ -94,6 +95,7 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
         private const val EXTRA_ANIME = "anime"
         private const val EXTRA_KP = "kp"
         private const val EXTRA_IMDB_RATING = "imdb_rating"
+        private const val EXTRA_SEASONS = "seasons"
         private const val ACTION_PIP_TOGGLE = "com.dopomine.film.PIP_TOGGLE"
         /** How long a page runs hidden behind the loading screen before it is shown as it is. */
         private const val SNIFF_HIDDEN_MS = 10_000L
@@ -121,6 +123,7 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
                 .putExtra(EXTRA_ANIME, movie.isAnime)
                 .putExtra(EXTRA_KP, movie.ratingKp ?: 0.0)
                 .putExtra(EXTRA_IMDB_RATING, movie.ratingImdb ?: 0.0)
+                .putExtra(EXTRA_SEASONS, movie.seasons ?: 0)
 
         private fun Intent.toMovie(): Movie? {
             val id = getIntExtra(EXTRA_ID, 0).takeIf { it > 0 } ?: return null
@@ -135,6 +138,7 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
                 genres = if (getBooleanExtra(EXTRA_ANIME, false)) listOf(Movie.ANIME) else emptyList(),
                 ratingKp = getDoubleExtra(EXTRA_KP, 0.0).takeIf { it > 0 },
                 ratingImdb = getDoubleExtra(EXTRA_IMDB_RATING, 0.0).takeIf { it > 0 },
+                seasons = getIntExtra(EXTRA_SEASONS, 0).takeIf { it > 0 },
             )
         }
     }
@@ -177,6 +181,11 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
     /** Segments skipped (or declined) in the current video: never skipped automatically again. */
     private val doneSegments = HashSet<Segment>()
     private var webDurationMs = 0L
+    /** Season and episode the player page shows: streams caught from it carry no numbers. */
+    private var pageSeason: Int? = null
+    private var pageEpisode: Int? = null
+    /** The page's numbers the current segments were looked up with (null: the source's own numbers). */
+    private var segmentsPageHint: Pair<Int?, Int?>? = null
     private var networkRetries = 0
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
     private var customView: View? = null
@@ -317,12 +326,15 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
         session.status = "Ищем, откуда сайт берёт видео…"
         session.log.clear()
         // favourites and history keep only a few fields: take the IDs the players match by from the catalog
-        if (movie.malId == null || movie.imdbId == null) {
+        if (movie.malId == null || movie.imdbId == null || (movie.type.isSeries && movie.seasons == null)) {
             runCatching { container.catalogDb.byId(movie.id) }.getOrNull()?.let { full ->
                 movie = movie.copy(
                     imdbId = movie.imdbId ?: full.imdbId,
                     malId = movie.malId ?: full.malId,
                     genres = (movie.genres + full.genres).distinct(),
+                    seasons = movie.seasons ?: full.seasons,
+                    originalTitle = movie.originalTitle ?: full.originalTitle,
+                    year = movie.year ?: full.year,
                 )
             }
         }
@@ -681,14 +693,10 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
         if (duration <= 0) return
         val own = sourceSegments
         val mark = session.introMark?.let { (a, b) -> listOf(Segment(SegmentKind.INTRO, a * 1000L, b * 1000L, "Ваша разметка")) }.orEmpty()
-        // a caught stream of a show has no episode number, so only the viewer's own mark applies to it
-        val lookup = !(movie.type.isSeries && episode == null)
-        val mal = (session.playable as? Playable.Series)?.seasons?.firstOrNull { it.number == season }?.malId
-            ?: movie.malId.takeIf { season == null || season == 1 }
-        val request = SkipRequest(movie.imdbId, mal, season, episode, duration)
+        val request = skipRequest(duration, season, episode)
         val generation = ++segmentsGeneration
         segmentsJob = lifecycleScope.launch {
-            val found = if (lookup) runCatching { container.skipSegments.fetch(request, ::log) }.getOrDefault(emptyList()) else emptyList()
+            val found = runCatching { container.skipSegments.fetch(request, ::log) }.getOrDefault(emptyList())
             if (generation != segmentsGeneration) return@launch
             session.segments = SegmentRules.merge(duration, own, found, mark)
             if (session.segments.isNotEmpty()) {
@@ -697,6 +705,35 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
                 })
             }
         }
+    }
+
+    /**
+     * What is playing, for the intro databases. A stream caught from a page (or the page's own
+     * player) has no numbers: the page may show them; a show with a single season needs only the
+     * episode, and without one the intro of its first episodes is used if they agree.
+     */
+    private fun skipRequest(duration: Long, itemSeason: Int?, itemEpisode: Int?): SkipRequest {
+        val series = movie.type.isSeries
+        val fromPage = series && itemSeason == null && itemEpisode == null
+        segmentsPageHint = if (fromPage) pageSeason to pageEpisode else null
+        val onlySeason = (movie.seasons ?: if (movie.type == ContentType.MINI) 1 else 0) == 1
+        val season = if (fromPage) pageSeason ?: 1.takeIf { onlySeason } else itemSeason
+        val episode = if (fromPage) pageEpisode else itemEpisode
+        val seasons = (session.playable as? Playable.Series)?.seasons.orEmpty()
+        // episode counts line seasons up with MyAnimeList's entries only when they are numbered 1, 2, 3…
+        val numbered = seasons.isNotEmpty() && seasons.map { it.number } == (1..seasons.size).toList()
+        return SkipRequest(
+            imdbId = movie.imdbId,
+            malId = seasons.firstOrNull { it.number == season }?.malId,
+            season = season,
+            episode = episode,
+            durationMs = duration,
+            series = series,
+            baseMalId = movie.malId,
+            anime = if (movie.isAnime) AnimeTitle(movie.title, movie.originalTitle, movie.year, series) else null,
+            seasonIndex = (season ?: 1) - 1,
+            seasonSizes = if (numbered) seasons.map { s -> s.episodes.maxOfOrNull { it.number } ?: 0 } else emptyList(),
+        )
     }
 
     private fun checkSegments(position: Long, duration: Long, playing: Boolean) {
@@ -1045,6 +1082,24 @@ class PlayerActivity : ComponentActivity(), PlayerControls, WebPlayer.Listener {
     override fun onPlayingChanged(playing: Boolean) {
         // the hidden page must never play over the native player
         if (playing && session.mode == Mode.NATIVE && !session.webOverlay) web?.muteAll()
+    }
+
+    /**
+     * The page shows another season or episode. Segments looked up with what it showed before
+     * (or with nothing) are asked for again; a native source's own numbers are left alone.
+     */
+    override fun onEpisodeHint(season: Int?, episode: Int?) {
+        if (season == pageSeason && episode == pageEpisode) return
+        pageSeason = season
+        pageEpisode = episode
+        if (season != null || episode != null) {
+            log("Страница плеера: " + listOfNotNull(season?.let { "сезон $it" }, episode?.let { "серия $it" }).joinToString(", "))
+        }
+        val hint = segmentsPageHint ?: return
+        if (segmentsRequested && hint != (season to episode)) {
+            segmentsJob?.cancel()
+            segmentsRequested = false
+        }
     }
 
     /** The site's own player: the same skipping, driven by the page's video position. */

@@ -132,9 +132,10 @@ function registerIpc() {
       onStream: page?.catching
         ? stream => {
           player.log(`${page.name}: поток пойман — играет плеер приложения`);
-          win?.webContents.send("player.caught", stream, page.name);
+          win?.webContents.send("player.caught", stream, page.name, site.pageHint());
         }
         : undefined,
+      onEpisode: hint => win?.webContents.send("player.siteEpisode", hint),
     });
   });
   handle("player.hideSite", () => win && site.hideSite(win));

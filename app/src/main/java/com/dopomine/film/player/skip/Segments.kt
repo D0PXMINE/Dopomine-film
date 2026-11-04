@@ -21,13 +21,21 @@ data class Segment(val kind: SegmentKind, val startMs: Long, val endMs: Long?, v
 @Immutable
 data class SkipRequest(
     val imdbId: String?,
+    /** MyAnimeList ID of exactly this season (AniLiberty publishes one per release). */
     val malId: Int?,
     val season: Int?,
     val episode: Int?,
     val durationMs: Long,
-) {
-    val isEpisode: Boolean get() = season != null && episode != null
-}
+    /** A show: its episode may be unknown (a stream caught from a player page). */
+    val series: Boolean = season != null,
+    /** MyAnimeList ID of the show's first season (or of the film), for anime. */
+    val baseMalId: Int? = null,
+    /** What to look the anime up by when no MyAnimeList ID is known. */
+    val anime: AnimeTitle? = null,
+    /** [season] counted from 0, and the source's episode counts per season (when it numbers them 1, 2, 3…). */
+    val seasonIndex: Int = (season ?: 1) - 1,
+    val seasonSizes: List<Int> = emptyList(),
+)
 
 object SegmentRules {
     private const val MIN_MS = 5_000L

@@ -1,6 +1,7 @@
 // Checks the shared page script (Android assets/player/frames.js, also used here) in Chromium
 // against stand-ins for typical player pages: a player that waits for a click, a manifest behind
-// a redirect with no extension, a fetch loader, a late player behind a bot check, nested iframes.
+// a redirect with no extension, a fetch loader, a late player behind a bot check, nested iframes;
+// the season and episode a player shows in its pickers, buttons, title or address.
 // Run: node test/frames.mjs
 import { createRequire } from "node:module";
 import fs from "node:fs";
@@ -41,8 +42,30 @@ const pages = {
     <script>document.querySelector('a').addEventListener('click', function (e) { e.preventDefault(); window.__adClicked = true; });</script></body></html>`,
 };
 
+// a Kodik-like player: season and episode pickers; the viewer picks the next episode after a while
+pages['/pickers'] = `<!doctype html><html><body>
+  <select name="translation"><option selected>LostFilm (1-8 сезон)</option><option>Кубик в кубе</option></select>
+  <select name="season"><option>1 сезон</option><option selected>2 сезон</option></select>
+  <select name="series"><option>4 серия</option><option selected>5 серия</option><option>6 серия</option></select>
+  <script>setTimeout(function () { document.getElementsByName('series')[0].selectedIndex = 2; }, 2500);</script></body></html>`;
+// numbered buttons: the list around the highlighted one says what it counts
+pages['/buttons'] = `<!doctype html><html><body>
+  <div class="player-seasons"><span>1</span><span class="is-active">2</span></div>
+  <ul class="episodes-list"><li>1</li><li>2</li><li class="current">3</li></ul>
+  <div class="quality-box"><span class="selected">1080</span></div></body></html>`;
+
 const server = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
+  // one highlighted label, to see how it is read
+  if (u.pathname === '/label') {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    return res.end(`<!doctype html><html><body><button class="btn active">${u.searchParams.get('t')}</button></body></html>`);
+  }
+  // the season and episode only in the address
+  if (u.pathname === '/embed') {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    return res.end('<!doctype html><html><body><video></video></body></html>');
+  }
   if (pages[u.pathname]) { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); return res.end(pages[u.pathname]); }
   if (u.pathname === '/go') { res.writeHead(302, { location: '/cdn/stream?sig=abc' }); return res.end(); }
   if (u.pathname === '/cdn/stream') { res.writeHead(200, { 'content-type': 'text/plain' }); return res.end(M3U8); }
@@ -142,6 +165,42 @@ const server = http.createServer((req, res) => {
     });
     check('commands switch modes', JSON.stringify(state) === '[[true,true],true,false]', JSON.stringify(state));
     await ctx.close();
+  }
+  // 8. which episode the page shows
+  {
+    const episodes = async (page) => (await page.evaluate(() => window.__msgs)).filter(m => m.type === 'episode').map(m => [m.season, m.episode]);
+    const { page, ctx } = await open('/pickers', {});
+    await page.waitForTimeout(2300);
+    const first = await episodes(page);
+    await page.waitForTimeout(2500);
+    const all = await episodes(page);
+    check('pickers: season and episode read, voice-over ranges ignored', JSON.stringify(first) === '[[2,5]]', JSON.stringify(first));
+    check('pickers: the viewer\'s next pick reported', JSON.stringify(all.at(-1)) === '[2,6]', JSON.stringify(all));
+    await ctx.close();
+
+    const b = await open('/buttons', {});
+    await b.page.waitForTimeout(2300);
+    check('numbered buttons read by their list', JSON.stringify(await episodes(b.page)) === '[[2,3]]', JSON.stringify(await episodes(b.page)));
+    await b.ctx.close();
+
+    const e = await open('/embed?season=3&episode=7', {});
+    await e.page.waitForTimeout(2300);
+    check('season and episode from the address', JSON.stringify(await episodes(e.page)) === '[[3,7]]', JSON.stringify(await episodes(e.page)));
+    await e.ctx.close();
+
+    const labels = {
+      'S02E05': [2, 5], '1 сезон 3 серия': [1, 3], 'Сезон 1, Серия 12': [1, 12], 'Серия 7': [null, 7], '3-я серия': [null, 3],
+      'Сезон 4': [4, null], 'Episode 9': [null, 9], '8 сезонов': null, '24 серии': null, 'Серии 1-12': null, '1080p': null,
+    };
+    const wrong = [];
+    for (const [text, want] of Object.entries(labels)) {
+      const l = await open('/label?t=' + encodeURIComponent(text), {});
+      await l.page.waitForTimeout(2200);
+      const got = await episodes(l.page);
+      if (JSON.stringify(got) !== JSON.stringify(want ? [want] : [])) wrong.push(`${text} → ${JSON.stringify(got)}`);
+      await l.ctx.close();
+    }
+    check('labels read right', wrong.length === 0, wrong.join('; '));
   }
   await browser.close();
   server.close();

@@ -138,7 +138,11 @@ async function sniffOrShow(m: Movie, key: string, name: string, base: Omit<Resol
   log(`${name}: ловим поток со страницы плеера…`);
   const s = await site.sniff(mirror(), picker, m.id, { adBlock, manifestsOnly: !adBlock, embedUrl, timeoutMs: SNIFF_HIDDEN_MS }, log);
   // the page goes along: it plays the video itself if the app cannot
-  if (s) return { ...base, choice: key, playable: { kind: "single", sourceName: name, stream: s }, page: { embedUrl: embedUrl ?? null, name, catching: false } };
+  if (s) {
+    const hint = site.pageHint();
+    if (hint) log(`Страница плеера: ${[hint.season && `сезон ${hint.season}`, hint.episode && `серия ${hint.episode}`].filter(Boolean).join(", ")}`);
+    return { ...base, choice: key, playable: { kind: "single", sourceName: name, stream: s }, page: { embedUrl: embedUrl ?? null, name, catching: false }, hint };
+  }
   log(`${name}: поток пока не пойман — показываем страницу плеера, приложение ждёт дальше`);
   return { ...base, choice: key, playable: null, page: { embedUrl: embedUrl ?? null, name, catching: true } };
 }

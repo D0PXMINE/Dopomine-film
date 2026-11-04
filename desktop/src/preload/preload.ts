@@ -58,6 +58,7 @@ const api: DpmApi = {
     siteBounds: call("player.siteBounds"),
     siteSeek: call("player.siteSeek"),
     onSiteTime: l => subscribe("player.siteTime", l),
+    onSiteEpisode: l => subscribe("player.siteEpisode", l),
   } as DpmApi["player"],
   app: {
     version: call("app.version"),

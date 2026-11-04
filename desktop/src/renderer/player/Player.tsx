@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Movie, Playable, ResolveResult, Segment, SitePage, Stream } from "../../shared/types";
-import { isSeries, SOURCE } from "../../shared/types";
-import { inSegment, merge, SEGMENT_TITLE, SKIP_LABEL, segmentEnd } from "../../shared/segments";
+import type { EpisodeHint, Movie, Playable, ResolveResult, Segment, SitePage, Stream } from "../../shared/types";
+import { SOURCE } from "../../shared/types";
+import { inSegment, merge, SEGMENT_TITLE, SKIP_LABEL, segmentEnd, skipRequest } from "../../shared/segments";
 import { Halftone } from "../halftone/Halftone";
 import { api } from "../lib/api";
 import { clock } from "../lib/format";
@@ -148,6 +148,7 @@ export default function Player({ movie: input }: { movie: Movie }) {
       return;
     }
     const p = r.playable;
+    setPageHint(shownHint(r.hint));
     if (p.kind == "single") {
       // a caught stream has no stable address; it is recognised by its duration instead
       const caught = r.choice == SOURCE.SITE || (r.choice ?? "").startsWith("src:");
@@ -278,15 +279,19 @@ export default function Player({ movie: input }: { movie: Movie }) {
   // ---- intro skipping ----------------------------------------------------------------------------
 
   const loadSegments = useCallback(async (durationMs: number, season: number | null, episode: number | null, own: Segment[]) => {
-    const m = ctx.current.movie;
     const mark: Segment[] = introMarkRef.current ? [{ kind: "INTRO", startMs: introMarkRef.current[0] * 1000, endMs: introMarkRef.current[1] * 1000, source: "Ваша разметка" }] : [];
-    // a caught stream of a show has no episode number, so only the viewer's own mark applies to it
-    const lookup = !(isSeries(m.type) && episode == null);
-    const p = ctx.current.result?.playable;
-    const mal = (p?.kind == "series" ? p.seasons.find(s => s.number == season)?.malId : null) ?? (season == null || season == 1 ? m.malId : null);
-    const found = lookup ? await api.player.segments({ imdbId: m.imdbId, malId: mal, season, episode, durationMs }).catch(() => []) : [];
+    const request = skipRequest(ctx.current.movie, ctx.current.result?.playable, durationMs, season, episode, pageHintRef.current);
+    const found = await api.player.segments(request).catch(() => []);
     setSegments(merge(durationMs, own, found, mark));
   }, []);
+  /** The season and episode the player page shows: a stream caught from it carries no numbers. */
+  const [pageHint, setPageHint] = useState<EpisodeHint | null>(null);
+  const pageHintRef = useRef(pageHint);
+  pageHintRef.current = pageHint;
+  const shownHint = (h: EpisodeHint | null | undefined) => (h && (h.season != null || h.episode != null) ? h : null);
+  useEffect(() => api.player.onSiteEpisode(h => setPageHint(shownHint(h))), []);
+  /** Part of what segments were looked up with: only for videos without their own numbers. */
+  const hintKey = (season: number | null, episode: number | null) => (season == null && episode == null ? `${pageHint?.season ?? ""}x${pageHint?.episode ?? ""}` : "");
   const introMarkRef = useRef(introMark);
   introMarkRef.current = introMark;
 
@@ -352,17 +357,18 @@ export default function Player({ movie: input }: { movie: Movie }) {
   const durationMs = v && isFinite(v.duration) ? v.duration * 1000 : 0;
   useEffect(() => {
     if (phase != "playing" || !item || durationMs <= 0) return;
-    const key = `${item.stream.url}:${introMark?.join(",")}`;
+    const key = `${item.stream.url}:${introMark?.join(",")}:${hintKey(item.season, item.episode)}`;
     if (segmentsFor.current == key) return;
     segmentsFor.current = key;
     void loadSegments(durationMs, item.season, item.episode, item.stream.segments);
-  }, [phase, item, durationMs, loadSegments, introMark]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, item, durationMs, loadSegments, introMark, pageHint]);
 
   // site player: the page's own video position
   useEffect(() => api.player.onSiteTime((t, d) => setSitePos({ t, d })), []);
   useEffect(() => {
     if (phase != "site" || !sitePos) return;
-    const key = `site:${Math.round(sitePos.d)}:${introMark?.join(",")}`;
+    const key = `site:${Math.round(sitePos.d)}:${introMark?.join(",")}:${hintKey(null, null)}`;
     if (segmentsFor.current != key) {
       segmentsFor.current = key;
       done.current.clear();
@@ -479,10 +485,11 @@ export default function Player({ movie: input }: { movie: Movie }) {
   }, [phase, sitePage]);
 
   // the page's stream, caught once the viewer pressed play there: the app's player takes over
-  useEffect(() => api.player.onCaught((stream, name) => {
+  useEffect(() => api.player.onCaught((stream, name, hint) => {
     if (phaseRef.current != "site") return;
     const page = { ...sitePageRef.current, catching: false };
     caughtFrom.current = page;
+    setPageHint(shownHint(hint));
     setResult(r => (r ? { ...r, playable: { kind: "single", sourceName: name, stream } } : r));
     void playItem({ stream, key: null, season: null, episode: null, source: name });
   }), [playItem]);

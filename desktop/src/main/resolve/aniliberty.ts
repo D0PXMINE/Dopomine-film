@@ -79,7 +79,7 @@ async function resolveOn(host: string, movie: Movie, log: Log): Promise<Playable
     if (episodes.length == 0) throw new ResolveError("AniLiberty: нет серий");
     return episodes.length == 1
       ? { kind: "single", sourceName: NAME, stream: episodes[0].stream }
-      : { kind: "series", sourceName: NAME, seasons: [{ number: 1, episodes }] };
+      : { kind: "series", sourceName: NAME, seasons: [{ number: 1, episodes, malId: match.mal }] };
   }
 
   // a show: every TV release of the franchise is a season, in the franchise's order

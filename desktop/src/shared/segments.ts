@@ -1,4 +1,5 @@
-import type { Segment, SegmentKind } from "./types";
+import type { EpisodeHint, Movie, Playable, Segment, SegmentKind, SkipRequest } from "./types";
+import { isAnime, isSeries } from "./types";
 
 const MIN_MS = 5_000;
 const MAX_MS = 5 * 60_000;
@@ -34,4 +35,32 @@ export function merge(durationMs: number, ...sources: Segment[][]): Segment[] {
     }
     return [];
   });
+}
+
+/**
+ * What is playing, for the intro databases. A stream caught from a page (or the page's own
+ * player) has no numbers: the page may show them ([page]); a show with a single season needs only
+ * the episode, and without one the intro its first episodes agree on is used.
+ */
+export function skipRequest(m: Movie, playable: Playable | null | undefined, durationMs: number, itemSeason: number | null, itemEpisode: number | null, page: EpisodeHint | null): SkipRequest {
+  const series = isSeries(m.type);
+  const fromPage = series && itemSeason == null && itemEpisode == null;
+  const onlySeason = (m.seasons ?? (m.type == "MINI" ? 1 : 0)) == 1;
+  const season = fromPage ? page?.season ?? (onlySeason ? 1 : null) : itemSeason;
+  const episode = fromPage ? page?.episode ?? null : itemEpisode;
+  const seasons = playable?.kind == "series" ? playable.seasons : [];
+  // episode counts line seasons up with MyAnimeList's entries only when they are numbered 1, 2, 3…
+  const numbered = seasons.length > 0 && seasons.every((s, i) => s.number == i + 1);
+  return {
+    imdbId: m.imdbId ?? null,
+    malId: seasons.find(s => s.number == season)?.malId ?? null,
+    season,
+    episode,
+    durationMs,
+    series,
+    baseMalId: m.malId ?? null,
+    anime: isAnime(m) ? { title: m.title, original: m.originalTitle ?? null, year: m.year ?? null, series } : null,
+    seasonIndex: (season ?? 1) - 1,
+    seasonSizes: numbered ? seasons.map(s => s.episodes.reduce((n, e) => Math.max(n, e.number), 0)) : [],
+  };
 }

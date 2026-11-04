@@ -52,6 +52,8 @@ class WebPlayer(
         fun onPlayingChanged(playing: Boolean)
         /** Position of the page's video, about once a second while it plays. */
         fun onVideoTime(seconds: Double, duration: Double)
+        /** The season and episode the page shows (either may be unknown), when they change. */
+        fun onEpisodeHint(season: Int?, episode: Int?)
         fun onPageError(message: String)
         fun onShowFullscreen(view: View, callback: WebChromeClient.CustomViewCallback)
         fun onHideFullscreen()
@@ -68,6 +70,9 @@ class WebPlayer(
     private val frames = LinkedHashSet<JavaScriptReplyProxy>()
     private var playerHost: String = ""
     private var pickerHost: String = ""
+    /** What each frame says it plays, latest last: the frame with the video is believed first. */
+    private val episodeHints = LinkedHashMap<JavaScriptReplyProxy, Pair<Int?, Int?>>()
+    private var episodeHint: Pair<Int?, Int?> = null to null
 
     @Volatile var adBlock = true
     /** Only HLS/DASH manifests count as a catch (used when ads are not blocked: ad videos are MP4). */
@@ -133,8 +138,16 @@ class WebPlayer(
                     post(reply, """{"cmd":"nativeMenu"}""")
                 }
             }
+            "episode" -> {
+                fun number(key: String) = json.optInt(key, 0).takeIf { it > 0 }
+                episodeHints.remove(reply)
+                episodeHints[reply] = number("season") to number("episode")
+                if (episodeHints.size > MAX_FRAMES) episodeHints.remove(episodeHints.keys.first())
+                publishEpisode()
+            }
             "media" -> {
                 videoProxy = reply
+                publishEpisode()
                 val url = json.optString("url")
                 val referer = json.optString("referer")
                 // a manifest recognised by its content may have no telling extension
@@ -297,6 +310,18 @@ class WebPlayer(
         frames.toList().forEach { proxy -> runCatching { proxy.postMessage(json) }.onFailure { frames.remove(proxy) } }
     }
 
+    private fun publishEpisode() {
+        val hints = episodeHints.values.toList().asReversed()
+        val best = videoProxy?.let(episodeHints::get)?.takeIf { it.second != null }
+            ?: hints.firstOrNull { it.second != null }
+            ?: videoProxy?.let(episodeHints::get)?.takeIf { it.first != null }
+            ?: hints.firstOrNull { it.first != null }
+            ?: (null to null)
+        if (best == episodeHint) return
+        episodeHint = best
+        listener.onEpisodeHint(best.first, best.second)
+    }
+
     private fun remember(proxy: JavaScriptReplyProxy) {
         if (frames.add(proxy) && frames.size > MAX_FRAMES) frames.remove(frames.first())
     }
@@ -306,6 +331,8 @@ class WebPlayer(
         frames.clear()
         sourcesProxy = null
         videoProxy = null
+        episodeHints.clear()
+        publishEpisode()
         rejected.clear()
         silent = false
         applyState()

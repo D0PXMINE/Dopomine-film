@@ -70,7 +70,7 @@ class AniLibertyResolver(private val http: OkHttpClient) {
             val episodes = episodes(host, release.id)
             val first = episodes.firstOrNull() ?: throw ResolveException("AniLiberty: нет серий")
             return if (episodes.size == 1) Playable.Single(NAME, first.stream)
-            else Playable.Series(NAME, listOf(Season(1, episodes)))
+            else Playable.Series(NAME, listOf(Season(1, episodes, release.mal)))
         }
 
         // a show: every TV release of the franchise is a season, in the franchise's order

@@ -171,17 +171,44 @@ export interface ResolveResult {
   playable: Playable | null;
   /** Nothing to play directly: this page is shown instead (catching goes on if it says so). */
   page?: SitePage | null;
+  /** The season and episode the page showed when its stream was caught. */
+  hint?: EpisodeHint | null;
   /** The movie with the catalog's IDs filled in (favourites and history keep only a few fields). */
   movie: Movie;
   error?: string | null;
 }
 
+/** What an anime is looked up by when the catalog has no MyAnimeList ID for it. */
+export interface AnimeTitle {
+  title: string;
+  original?: string | null;
+  year?: number | null;
+  series: boolean;
+}
+
+/** What is playing, in the terms the intro databases use. */
 export interface SkipRequest {
   imdbId?: string | null;
+  /** MyAnimeList ID of exactly this season (AniLiberty publishes one per release). */
   malId?: number | null;
   season?: number | null;
   episode?: number | null;
   durationMs: number;
+  /** A show: its episode may be unknown (a stream caught from a player page). Default: season given. */
+  series?: boolean;
+  /** MyAnimeList ID of the show's first season (or of the film), for anime. */
+  baseMalId?: number | null;
+  /** What to look the anime up by when no MyAnimeList ID is known. */
+  anime?: AnimeTitle | null;
+  /** The season counted from 0, and the source's episode counts per season (when it numbers them 1, 2, 3…). */
+  seasonIndex?: number;
+  seasonSizes?: number[];
+}
+
+/** The season and episode a player page shows (either may be unknown). */
+export interface EpisodeHint {
+  season: number | null;
+  episode: number | null;
 }
 
 // ---- library & settings ------------------------------------------------------------------------
@@ -268,11 +295,13 @@ export interface DpmApi {
     /** A player page (or the site) over the player area; with page.catching its stream is caught. */
     showSite(movie: Movie, bounds: { x: number; y: number; width: number; height: number }, page?: SitePage | null): Promise<void>;
     /** A stream caught from the shown page, to be played by the app's own player. */
-    onCaught(listener: (stream: Stream, name: string) => void): () => void;
+    onCaught(listener: (stream: Stream, name: string, hint: EpisodeHint | null) => void): () => void;
     hideSite(): Promise<void>;
     siteBounds(bounds: { x: number; y: number; width: number; height: number }): Promise<void>;
     siteSeek(seconds: number): Promise<void>;
     onSiteTime(listener: (t: number, d: number) => void): () => void;
+    /** The season and episode the shown page displays, whenever they change. */
+    onSiteEpisode(listener: (hint: EpisodeHint) => void): () => void;
   };
   app: {
     version(): Promise<string>;

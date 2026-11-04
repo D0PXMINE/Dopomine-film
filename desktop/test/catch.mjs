@@ -28,7 +28,7 @@ ff("-f", "dash", "-seg_duration", "4", path.join(media, "dash", "manifest.mpd"))
 let base = "";
 const playlist = () => fs.readFileSync(path.join(media, "hls", "index.m3u8"), "utf8").replace(/^(?!#)(\S+)$/gm, l => `${base}/hls/${l}`);
 
-const clickPlayer = (src, how) => `<!doctype html><html><body style="margin:0;background:#000">
+const clickPlayer = (src, how, extra = "") => `<!doctype html><html><body style="margin:0;background:#000">${extra}
   <div id="ov" style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center">
     <div style="width:90px;height:90px;border-radius:50%;background:#fff"></div></div>
   <video style="width:100%;height:100%"></video>
@@ -42,7 +42,9 @@ const pages = {
   "/302": `<iframe src="/p/typed" allowfullscreen style="position:fixed;inset:0;width:100%;height:100%;border:0"></iframe>`,
   "/303": `<iframe src="/p/manual" allowfullscreen style="position:fixed;inset:0;width:100%;height:100%;border:0"></iframe>`,
   "/304": `<iframe src="/p/dash" allowfullscreen style="position:fixed;inset:0;width:100%;height:100%;border:0"></iframe>`,
-  "/p/click": clickPlayer("/go", "xhr"),
+  // with the season and episode pickers of a show's player
+  "/p/click": clickPlayer("/go", "xhr", `<select name="season" style="position:fixed;top:0;left:0"><option>1 сезон</option><option selected>2 сезон</option></select>
+    <select name="series" style="position:fixed;top:0;left:120px"><option>4 серия</option><option selected>5 серия</option></select>`),
   "/p/typed": clickPlayer("/cdn/typed?t=1", "media"),
   // a small button in a corner, named like nothing a script would press
   "/p/manual": `<!doctype html><html><body style="margin:0;background:#000">
@@ -116,6 +118,8 @@ try {
   await page.evaluate(() => window.__dpmTestPlay?.(301));
   check("player waiting for a click: caught and played", await until(playing, 60), await caughtLine());
   check("caught at its final address", (await caughtLine()).includes("/cdn/stream"));
+  const noted = (await page.evaluate(() => window.dpm.player.log())).find(l => l.startsWith("Страница плеера")) ?? "";
+  check("the season and episode the page showed are noted", noted.includes("сезон 2, серия 5"), noted);
   await closePlayer();
 
   // 2. known only by its Content-Type
