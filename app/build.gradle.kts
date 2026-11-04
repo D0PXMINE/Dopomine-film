@@ -18,7 +18,7 @@ val keystoreProps = Properties().apply {
     if (file.exists()) file.inputStream().use { load(it) }
 }
 fun signingValue(property: String, env: String): String? =
-    keystoreProps.getProperty(property) ?: System.getenv(env)?.takeIf { it.isNotBlank() }
+    (keystoreProps.getProperty(property) ?: System.getenv(env))?.trim()?.takeIf { it.isNotEmpty() }
 val releaseKeystore = signingValue("storeFile", "DOPOMINE_KEYSTORE")
 
 android {

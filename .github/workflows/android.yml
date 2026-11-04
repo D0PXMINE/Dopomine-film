@@ -23,21 +23,30 @@ jobs:
       - name: Unit tests
         run: ./gradlew --no-daemon :app:testDebugUnitTest
 
-      # the owner's signing key comes from the SIGNING_KEYSTORE (base64) and SIGNING_PASSWORD secrets
+      # The owner's signing key comes from the SIGNING_KEYSTORE (base64) and SIGNING_PASSWORD secrets.
+      # It is checked first: a secret pasted with extra characters or cut short must not fail the build.
       - name: Signing key
         env:
           SIGNING_KEYSTORE: ${{ secrets.SIGNING_KEYSTORE }}
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
         run: |
-          if [ -n "$SIGNING_KEYSTORE" ]; then
-            echo "$SIGNING_KEYSTORE" | base64 -d > "$RUNNER_TEMP/release.jks"
-            echo "DOPOMINE_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
-          else
+          if [ -z "$SIGNING_KEYSTORE" ]; then
             echo "::warning::No SIGNING_KEYSTORE secret: the APK is signed with a throwaway debug key and will not install over the official one"
+            exit 0
+          fi
+          key="$RUNNER_TEMP/release.jks"
+          printf '%s' "$SIGNING_KEYSTORE" | tr -d ' \r\n\t' | base64 -d > "$key" 2>/dev/null || true
+          password=$(printf '%s' "$SIGNING_PASSWORD" | tr -d '\r\n')
+          echo "::add-mask::$password"
+          if keytool -list -keystore "$key" -storepass "$password" > /dev/null 2>&1; then
+            echo "DOPOMINE_KEYSTORE=$key" >> "$GITHUB_ENV"
+            echo "DOPOMINE_KEYSTORE_PASSWORD=$password" >> "$GITHUB_ENV"
+            echo "Signing with the owner's key"
+          else
+            echo "::warning::SIGNING_KEYSTORE and SIGNING_PASSWORD do not open the key (key file from the secret: $(stat -c %s "$key") bytes, password: ${#password} characters). The APK is signed with a throwaway debug key."
           fi
 
       - name: Build release APK
-        env:
-          DOPOMINE_KEYSTORE_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
         run: ./gradlew --no-daemon :app:assembleRelease
 
       # the APK also lives in release/; a full artifact quota should not turn the build red
