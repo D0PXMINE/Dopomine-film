@@ -1,6 +1,7 @@
 package com.dopomine.film.data.catalog
 
 import androidx.compose.runtime.Immutable
+import com.dopomine.film.data.model.Movie
 import java.util.Calendar
 
 enum class Kind(val label: String, val sql: String) {
@@ -10,6 +11,25 @@ enum class Kind(val label: String, val sql: String) {
     SHOWS("ТВ-шоу", "type = 3"),
     ANIME("Аниме", "(genres & ${Genres.bit("Аниме")}) != 0"),
     ALL("Всё", "1 = 1"),
+}
+
+/**
+ * What search keeps: films, shows (TV shows too) or anime. An anime film is both a film and
+ * anime, as in the catalog's tabs.
+ */
+enum class SearchKind(val label: String, val sql: String?) {
+    ALL("Все", null),
+    FILMS("Фильмы", "type = 0"),
+    SERIES("Сериалы", "type != 0"),
+    ANIME("Аниме", Kind.ANIME.sql),
+    ;
+
+    fun matches(movie: Movie): Boolean = when (this) {
+        ALL -> true
+        FILMS -> !movie.type.isSeries
+        SERIES -> movie.type.isSeries
+        ANIME -> movie.isAnime
+    }
 }
 
 enum class Sort(val label: String, val sql: String) {

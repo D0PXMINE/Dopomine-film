@@ -53,6 +53,22 @@ export interface Page {
 }
 
 export type Kind = "FILMS" | "SERIES" | "ANIME" | "MINI" | "SHOWS" | "ALL";
+
+/**
+ * What search keeps: films, shows (TV shows too) or anime. An anime film is both a film and
+ * anime, as in the catalog's tabs.
+ */
+export type SearchKind = "ALL" | "FILMS" | "SERIES" | "ANIME";
+export const SEARCH_KINDS: { value: SearchKind; label: string }[] = [
+  { value: "ALL", label: "Все" },
+  { value: "FILMS", label: "Фильмы" },
+  { value: "SERIES", label: "Сериалы" },
+  { value: "ANIME", label: "Аниме" },
+];
+
+export function matchesKind(m: Movie, kind: SearchKind): boolean {
+  return kind == "ALL" || (kind == "FILMS" ? !isSeries(m.type) : kind == "SERIES" ? isSeries(m.type) : isAnime(m));
+}
 export type Sort = "TREND" | "POPULAR" | "RATING" | "NEW";
 
 export interface CatalogQuery {
@@ -251,8 +267,8 @@ export interface DpmApi {
     page(query: CatalogQuery, page: number, size?: number): Promise<Page>;
     section(key: string, size?: number): Promise<Movie[]>;
     sections(mode: "films" | "series" | "anime"): Promise<Section[]>;
-    search(text: string, page: number): Promise<Page>;
-    searchOnline(text: string, exclude: number[]): Promise<Movie[]>;
+    search(text: string, page: number, kind?: SearchKind): Promise<Page>;
+    searchOnline(text: string, exclude: number[], kind?: SearchKind): Promise<Movie[]>;
     movie(id: number): Promise<Movie>;
     details(id: number): Promise<MovieDetails>;
     similar(movie: Movie): Promise<Movie[]>;

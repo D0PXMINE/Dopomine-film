@@ -3,10 +3,12 @@ package com.dopomine.film
 import android.graphics.BitmapFactory
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.rememberNavController
 import coil3.ImageLoader
@@ -14,6 +16,7 @@ import coil3.SingletonImageLoader
 import coil3.annotation.DelicateCoilApi
 import coil3.asImage
 import coil3.test.FakeImageLoaderEngine
+import com.dopomine.film.data.catalog.SearchKind
 import com.dopomine.film.data.model.ContentType
 import com.dopomine.film.data.model.Movie
 import com.dopomine.film.player.GestureKind
@@ -46,6 +49,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Protocol
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -181,6 +185,28 @@ class ScreenshotTest {
         compose.onNodeWithText("Фильм, сериал или ссылка Кинопоиска…").performClick()
         settle()
         compose.onRoot().captureRoboImage("$out/06_search_empty.png")
+    }
+
+    @Test
+    fun searchByKind() {
+        runBlocking {
+            val films = container.catalog.search("бэтмен", kind = SearchKind.FILMS).items
+            val series = container.catalog.search("бэтмен", kind = SearchKind.SERIES).items
+            assertTrue(films.isNotEmpty() && films.none { it.type.isSeries })
+            assertTrue(series.isNotEmpty() && series.all { it.type.isSeries })
+            val anime = container.catalog.search("наруто", kind = SearchKind.ANIME).items
+            assertTrue(anime.isNotEmpty() && anime.all { it.isAnime })
+            assertTrue(container.catalog.search("наруто", kind = SearchKind.FILMS).items.none { it.type.isSeries })
+        }
+        app { it.navigate("search") }
+        compose.onNode(hasSetTextAction()).performTextInput("наруто")
+        compose.onNodeWithText("Аниме").performClick()
+        // the query waits a moment for typing to stop, then the catalog answers
+        repeat(6) {
+            org.robolectric.shadows.ShadowLooper.idleMainLooper(400, java.util.concurrent.TimeUnit.MILLISECONDS)
+            settle()
+        }
+        compose.onRoot().captureRoboImage("$out/06b_search_anime.png")
     }
 
     @Test

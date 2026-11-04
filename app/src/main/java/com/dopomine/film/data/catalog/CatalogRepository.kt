@@ -25,11 +25,11 @@ class CatalogRepository(
         PagedMovies(items.take(size), page, items.size > size)
     }
 
-    /** Offline title search: every word must match the Russian or original title. */
-    suspend fun search(text: String, page: Int = 1): PagedMovies = appCall {
+    /** Offline title search: every word must match the Russian or original title; [kind] narrows it. */
+    suspend fun search(text: String, page: Int = 1, kind: SearchKind = SearchKind.ALL): PagedMovies = appCall {
         val tokens = normalize(text).split(' ').filter { it.isNotBlank() }.take(6)
         if (tokens.isEmpty()) return@appCall PagedMovies(emptyList(), page, false)
-        val where = tokens.joinToString(" AND ") { "search LIKE ?" }
+        val where = (tokens.map { "search LIKE ?" } + listOfNotNull(kind.sql?.let { "($it)" })).joinToString(" AND ")
         val args = tokens.map { "%$it%" }
         val prefix = normalize(text) + "%"
         val items = db.query(
@@ -40,11 +40,17 @@ class CatalogRepository(
         PagedMovies(items.take(pageSize), page, items.size > pageSize)
     }
 
-    /** Titles Wikidata knows but the offline snapshot does not (new or obscure ones). */
-    suspend fun searchOnline(text: String, exclude: Set<Int>): List<Movie> = appCall {
+    /**
+     * Titles Wikidata knows but the offline snapshot does not (new or obscure ones). Those the
+     * catalog knows are kept to [kind]; the others are kept: what they are is not known.
+     */
+    suspend fun searchOnline(text: String, exclude: Set<Int>, kind: SearchKind = SearchKind.ALL): List<Movie> = appCall {
         val hits = wikidata.search(text).filter { it.first !in exclude }
         val known = db.byIds(hits.map { it.first })
-        hits.map { (id, title) -> known[id] ?: Movie(id = id, title = title) }
+        hits.mapNotNull { (id, title) ->
+            val movie = known[id] ?: return@mapNotNull Movie(id = id, title = title)
+            movie.takeIf { kind.matches(it) }
+        }
     }
 
     /** A title by Kinopoisk ID: from the catalog, else from Wikidata, else a bare stub (still playable). */

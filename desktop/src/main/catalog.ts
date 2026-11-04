@@ -3,8 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
 import initSqlJs, { Database, SqlValue } from "sql.js";
-import type { CatalogInfo, CatalogQuery, ContentType, Kind, Movie, MovieDetails, Page, Section, Sort, UpdateResult } from "../shared/types";
-import { isSeries, stubMovie } from "../shared/types";
+import type { CatalogInfo, CatalogQuery, ContentType, Kind, Movie, MovieDetails, Page, SearchKind, Section, Sort, UpdateResult } from "../shared/types";
+import { isSeries, matchesKind, stubMovie } from "../shared/types";
 import { fetchBuffer, fetchJson, fetchText, Memo } from "./net";
 
 // ---- genres & queries (same as the Android app and tools/catalog/build_catalog.py) ---------------
@@ -250,11 +250,19 @@ export async function page(q: CatalogQuery, pageNo = 1, size = PAGE): Promise<Pa
   return { items: items.slice(0, size), page: pageNo, hasMore: items.length > size };
 }
 
-/** Offline title search: every word must match the Russian or original title. */
-export async function search(text: string, pageNo = 1): Promise<Page> {
+const SEARCH_KIND_SQL: Record<SearchKind, string | null> = {
+  ALL: null,
+  FILMS: "type = 0",
+  SERIES: "type != 0",
+  ANIME: KIND_SQL.ANIME,
+};
+
+/** Offline title search: every word must match the Russian or original title; [kind] narrows it. */
+export async function search(text: string, pageNo = 1, kind: SearchKind = "ALL"): Promise<Page> {
   const tokens = normalize(text).split(" ").filter(Boolean).slice(0, 6);
   if (tokens.length == 0) return { items: [], page: pageNo, hasMore: false };
-  const w = tokens.map(() => "search LIKE ?").join(" AND ");
+  const narrow = SEARCH_KIND_SQL[kind];
+  const w = [...tokens.map(() => "search LIKE ?"), ...(narrow ? [`(${narrow})`] : [])].join(" AND ");
   const args: SqlValue[] = [...tokens.map(t => `%${t}%`), normalize(text) + "%"];
   const items = await query(w, args, "CASE WHEN search LIKE ? THEN 0 ELSE 1 END, popularity DESC", PAGE + 1, (pageNo - 1) * PAGE);
   return { items: items.slice(0, PAGE), page: pageNo, hasMore: items.length > PAGE };
@@ -412,8 +420,11 @@ async function people(id: number): Promise<[string[], string[]]> {
   return [[...new Set(directors)], [...new Set(cast)].slice(0, 16)];
 }
 
-/** Titles Wikidata knows but the offline snapshot does not (new or obscure ones). */
-export async function searchOnline(text: string, exclude: number[]): Promise<Movie[]> {
+/**
+ * Titles Wikidata knows but the offline snapshot does not (new or obscure ones). Those the
+ * catalog knows are kept to [kind]; the others are kept: what they are is not known.
+ */
+export async function searchOnline(text: string, exclude: number[], kind: SearchKind = "ALL"): Promise<Movie[]> {
   const url = "https://www.wikidata.org/w/api.php?action=query&list=search&srlimit=20&format=json&srsearch=" +
     encodeURIComponent(`haswbstatement:P2603 ${text}`);
   const r = await fetchJson<{ query?: { search?: { title: string }[] } }>(url).catch(() => null);
@@ -430,7 +441,10 @@ export async function searchOnline(text: string, exclude: number[]): Promise<Mov
   const hits = qids.map(q => byQid.get(q)).filter((x): x is readonly [number, string] => !!x && x[0] > 0 && x[1] != "");
   const unique = [...new Map(hits.map(h => [h[0], h])).values()].filter(h => !exclude.includes(h[0]));
   const known = await byIds(unique.map(h => h[0]));
-  return unique.map(([id, title]) => known.get(id) ?? stubMovie(id, title));
+  return unique.flatMap(([id, title]) => {
+    const m = known.get(id);
+    return !m ? [stubMovie(id, title)] : matchesKind(m, kind) ? [m] : [];
+  });
 }
 
 /** A title by Kinopoisk ID: from the catalog, else Wikidata, else a bare stub (still playable). */

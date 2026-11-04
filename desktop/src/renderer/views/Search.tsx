@@ -1,16 +1,31 @@
 import { useEffect, useState } from "react";
-import type { Movie } from "../../shared/types";
+import type { Movie, SearchKind } from "../../shared/types";
+import { SEARCH_KINDS } from "../../shared/types";
 import { api } from "../lib/api";
 import { kpIdFrom } from "../lib/format";
 import { openDetails } from "../lib/state";
 import { Icon } from "../components/icons";
 import { Empty, MovieCard } from "../components/Movies";
-import { Spinner } from "../components/primitives";
+import { Segmented, Spinner } from "../components/primitives";
+
+/** The kind picked last: kept while the app runs, like the query itself. */
+let lastKind: SearchKind = "ALL";
+const NOTHING: Record<SearchKind, string> = {
+  ALL: "В офлайн-каталоге не нашлось.",
+  FILMS: "Среди фильмов не нашлось.",
+  SERIES: "Среди сериалов не нашлось.",
+  ANIME: "Среди аниме не нашлось.",
+};
 
 export default function Search({ query }: { query: string }) {
   const [items, setItems] = useState<Movie[] | null>(null);
   const [online, setOnline] = useState<Movie[] | null>(null);
   const [searchingOnline, setSearchingOnline] = useState(false);
+  const [kind, setKindState] = useState<SearchKind>(lastKind);
+  const setKind = (k: SearchKind) => {
+    lastKind = k;
+    setKindState(k);
+  };
   const id = kpIdFrom(query);
 
   useEffect(() => {
@@ -20,17 +35,18 @@ export default function Search({ query }: { query: string }) {
       return;
     }
     let alive = true;
-    const t = setTimeout(() => void api.catalog.search(query, 1).then(r => alive && setItems(r.items)), 150);
+    setItems(null);
+    const t = setTimeout(() => void api.catalog.search(query, 1, kind).then(r => alive && setItems(r.items)), 150);
     return () => {
       alive = false;
       clearTimeout(t);
     };
-  }, [query]);
+  }, [query, kind]);
 
   const findOnline = async () => {
     setSearchingOnline(true);
     try {
-      setOnline(await api.catalog.searchOnline(query, (items ?? []).map(m => m.id)));
+      setOnline(await api.catalog.searchOnline(query, (items ?? []).map(m => m.id), kind));
     } finally {
       setSearchingOnline(false);
     }
@@ -54,9 +70,13 @@ export default function Search({ query }: { query: string }) {
           <div className="caps">Поиск</div>
           <h1 className="page-title">«{query.trim()}»</h1>
         </div>
+        <Segmented<SearchKind> value={kind} options={SEARCH_KINDS} onChange={setKind} label="Что искать" />
       </div>
       {items == null ? <Spinner size={18} /> : items.length == 0 ? (
-        <div className="muted mono" style={{ padding: "8px 0 16px" }}>В офлайн-каталоге не нашлось.</div>
+        <div className="muted mono" style={{ padding: "8px 0 16px", display: "flex", alignItems: "center", gap: 12 }}>
+          {NOTHING[kind]}
+          {kind != "ALL" && <button type="button" className="btn sm ghost" onClick={() => setKind("ALL")}>Искать везде</button>}
+        </div>
       ) : (
         <div className="movie-grid">{items.map(m => <MovieCard key={m.id} movie={m} />)}</div>
       )}

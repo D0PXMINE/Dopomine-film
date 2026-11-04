@@ -31,7 +31,8 @@ const check = (name, ok, detail = "") => {
 const shot = async name => page.screenshot({ path: path.join(shots, `${name}.png`) });
 
 try {
-  await page.waitForSelector(".movie-card .movie-card-title", { timeout: 30_000 });
+  // the first start copies the catalog into a fresh profile: give it time
+  await page.waitForSelector(".movie-card .movie-card-title", { timeout: 90_000 });
   check("home renders shelves", (await page.locator(".shelf").count()) >= 3);
   await page.waitForTimeout(online ? 4000 : 800);
   await shot("01_home");
@@ -50,6 +51,24 @@ try {
   await page.waitForSelector(".search .movie-card");
   check("offline search", (await page.locator(".search .movie-card-title").first().textContent())?.includes("Матрица"));
   await shot("04_search");
+
+  // films, shows or anime only
+  const titles = async () => page.locator(".search .movie-card-title").allTextContents();
+  await page.locator(".main-head input").fill("наруто");
+  await page.waitForTimeout(600);
+  await page.locator(".search .segmented button", { hasText: "Сериалы" }).click();
+  await page.waitForTimeout(600);
+  const shows = await titles();
+  check("search: shows only", shows.includes("Наруто") && !shows.includes("Наруто: Путь ниндзя"), shows.slice(0, 5).join(" | "));
+  await shot("04b_search_series");
+  await page.locator(".search .segmented button", { hasText: "Фильмы" }).click();
+  await page.waitForTimeout(600);
+  const films = await titles();
+  check("search: films only", films.includes("Наруто: Путь ниндзя") && !films.includes("Наруто"), films.slice(0, 5).join(" | "));
+  await page.locator(".search .segmented button", { hasText: "Все" }).click();
+  await page.locator(".main-head input").fill("матрица");
+  await page.waitForTimeout(600);
+  await page.waitForSelector(".search .movie-card");
 
   await page.locator(".search .movie-card").first().click();
   await page.waitForSelector(".details-title");

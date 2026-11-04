@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, Menu, nativeTheme, net, protocol, shell } 
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { CatalogQuery, Movie, Settings, SitePage, SkipRequest, Stream } from "../shared/types";
+import type { CatalogQuery, Movie, SearchKind, Settings, SitePage, SkipRequest, Stream } from "../shared/types";
 import * as catalog from "./catalog";
 import * as media from "./media";
 import * as player from "./player";
@@ -92,8 +92,8 @@ function registerIpc() {
     return s ? (await catalog.page(s.query, 1, size ?? 24)).items : [];
   });
   handle("catalog.sections", (mode: "films" | "series" | "anime") => catalog.sections(mode));
-  handle("catalog.search", (text: string, page: number) => catalog.search(text, page));
-  handle("catalog.searchOnline", (text: string, exclude: number[]) => catalog.searchOnline(text, exclude));
+  handle("catalog.search", (text: string, page: number, kind?: SearchKind) => catalog.search(text, page, kind));
+  handle("catalog.searchOnline", (text: string, exclude: number[], kind?: SearchKind) => catalog.searchOnline(text, exclude, kind));
   handle("catalog.movie", (id: number) => catalog.movie(id));
   handle("catalog.details", (id: number) => catalog.details(id));
   handle("catalog.similar", (m: Movie) => catalog.similar(m));

@@ -8,6 +8,7 @@ import androidx.core.content.edit
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.dopomine.film.data.catalog.CatalogRepository
+import com.dopomine.film.data.catalog.SearchKind
 import com.dopomine.film.data.model.Movie
 import com.dopomine.film.ui.common.KpLinks
 import com.dopomine.film.ui.common.PagedLoader
@@ -41,8 +42,12 @@ class SearchViewModel(private val catalog: CatalogRepository, context: Context) 
         private set
     private var onlineJob: Job? = null
 
+    /** Films, shows or anime only (or everything). */
+    var kind by mutableStateOf(SearchKind.ALL)
+        private set
+
     private var activeQuery = ""
-    val loader = PagedLoader(viewModelScope) { page -> catalog.search(activeQuery, page) }
+    val loader = PagedLoader(viewModelScope) { page -> catalog.search(activeQuery, page, kind) }
 
     init {
         viewModelScope.launch {
@@ -60,13 +65,22 @@ class SearchViewModel(private val catalog: CatalogRepository, context: Context) 
         _query.value = value
     }
 
+    fun selectKind(value: SearchKind) {
+        if (value == kind) return
+        kind = value
+        online = null
+        onlineJob?.cancel()
+        onlineLoading = false
+        if (activeQuery.length >= 2 && directId == null) loader.reset()
+    }
+
     fun searchOnline() {
         val q = activeQuery
         if (q.length < 2) return
         onlineJob?.cancel()
         onlineLoading = true
         onlineJob = viewModelScope.launch {
-            online = runCatching { catalog.searchOnline(q, loader.items.map { it.id }.toSet()) }.getOrDefault(emptyList())
+            online = runCatching { catalog.searchOnline(q, loader.items.map { it.id }.toSet(), kind) }.getOrDefault(emptyList())
             onlineLoading = false
         }
     }

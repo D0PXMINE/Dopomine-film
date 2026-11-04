@@ -50,6 +50,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.dopomine.film.data.catalog.SearchKind
 import com.dopomine.film.data.model.Movie
 import com.dopomine.film.ui.common.ContentCard
 import com.dopomine.film.ui.common.Launchers
@@ -59,6 +60,7 @@ import com.dopomine.film.ui.components.Chip
 import com.dopomine.film.ui.components.EmptyHint
 import com.dopomine.film.ui.components.MovieRow
 import com.dopomine.film.ui.components.Pill
+import com.dopomine.film.ui.components.Segmented
 import com.dopomine.film.ui.navigation.BottomBarSpace
 import com.dopomine.film.ui.navigation.Nav
 import com.dopomine.film.ui.theme.T
@@ -107,6 +109,14 @@ fun SearchScreen(nav: Nav) {
                 Icon(Icons.Rounded.Close, "Очистить", tint = T.text3, modifier = Modifier.size(20.dp).clip(RoundedCornerShape(999.dp)).clickable { vm.setQuery("") })
             }
         }
+        // what to look for: everything, films, shows or anime
+        Segmented(
+            SearchKind.entries.map { it.label },
+            SearchKind.entries.indexOf(vm.kind),
+            { vm.selectKind(SearchKind.entries[it]) },
+            Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp).fillMaxWidth(),
+            fill = true,
+        )
         ContentCard {
             val id = vm.directId
             when {
@@ -138,6 +148,8 @@ fun SearchScreen(nav: Nav) {
                         item("online") {
                             OnlineBlock(
                                 empty = loader.items.isEmpty(),
+                                kind = vm.kind,
+                                onShowAll = { vm.selectKind(SearchKind.ALL) },
                                 results = vm.online,
                                 loading = vm.onlineLoading,
                                 onSearch = vm::searchOnline,
@@ -159,12 +171,33 @@ private fun Spinner() {
 }
 
 @Composable
-private fun OnlineBlock(empty: Boolean, results: List<Movie>?, loading: Boolean, onSearch: () -> Unit, onOpen: (Movie) -> Unit) {
+private fun OnlineBlock(
+    empty: Boolean,
+    kind: SearchKind,
+    onShowAll: () -> Unit,
+    results: List<Movie>?,
+    loading: Boolean,
+    onSearch: () -> Unit,
+    onOpen: (Movie) -> Unit,
+) {
     Column(Modifier.padding(top = 10.dp)) {
         when {
             loading -> Spinner()
             results == null -> Column(Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                if (empty) Text("В каталоге ничего не нашлось", style = Type.subtitle, color = T.text)
+                if (empty) {
+                    val where = when (kind) {
+                        SearchKind.ALL -> "В каталоге"
+                        SearchKind.FILMS -> "Среди фильмов"
+                        SearchKind.SERIES -> "Среди сериалов"
+                        SearchKind.ANIME -> "Среди аниме"
+                    }
+                    Text("$where ничего не нашлось", style = Type.subtitle, color = T.text)
+                    if (kind != SearchKind.ALL) {
+                        Spacer(Modifier.height(10.dp))
+                        Pill("Искать везде", onShowAll)
+                        Spacer(Modifier.height(14.dp))
+                    }
+                }
                 Text("Новые и редкие фильмы можно поискать в Wikidata", style = Type.mono, color = T.text3)
                 Spacer(Modifier.height(10.dp))
                 Pill("Искать в интернете", onSearch, icon = Icons.Outlined.Search)
